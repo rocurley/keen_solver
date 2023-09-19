@@ -1,0 +1,8 @@
+size = { ASCII_DIGIT+}
+letter_num = { "_" | "z" * ~ 'a'..'y'}
+repeat_count = { ASCII_DIGIT*}
+gap = { letter_num ~ repeat_count }
+gaps = { gap+ }
+constraint = { ("a" | "s" | "m" | "d") ~ ASCII_DIGIT+ }
+constraints = {constraint + }
+game_id = { size ~ ":" ~ gaps ~ "," ~ constraints }
