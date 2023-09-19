@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::{collections::HashMap, io::Write};
 
 use pest::Parser;
 use pest_derive::Parser;
@@ -23,16 +23,35 @@ struct Constraint {
     val: i32,
 }
 
-pub fn parse_game_id(raw: &str) {
+type Bitmask = u8;
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+struct CellInfo {
+    block_id: usize,
+    possibilities: Bitmask,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct GameState {
+    desc: String,
+    size: usize,
+    cells: Vec<CellInfo>,
+    blocks: Vec<Constraint>,
+}
+
+pub fn parse_game_id(raw: &str) -> GameState {
     let parsed = GameIDParser::parse(Rule::game_id, raw)
         .unwrap()
         .next()
         .unwrap();
     let mut parsed_iter = parsed.into_inner();
     let size_pair = parsed_iter.next().unwrap();
-    let size: usize = size_pair.as_str().parse().unwrap();
-
     let gaps_pair = parsed_iter.next().unwrap();
+    let constraints_pair = parsed_iter.next().unwrap();
+
+    let size: usize = size_pair.as_str().parse().unwrap();
+    let desc = format!("{},{}", gaps_pair.as_str(), constraints_pair.as_str());
+
     let mut lines = vec![false; 2 * size * (size - 1) + 1];
     let mut i = 0;
     for gap in gaps_pair.into_inner() {
@@ -77,22 +96,26 @@ pub fn parse_game_id(raw: &str) {
 
     let mut seen = HashMap::new();
     let mut next_block_id = 0;
-    let cell_blocks: Vec<usize> = (0..size * size)
+    let cell_blocks: Vec<CellInfo> = (0..size * size)
         .map(|i| {
             *seen.entry(blocks_uf.find(i)).or_insert_with(|| {
-                let out = next_block_id;
+                let block_id = next_block_id;
                 next_block_id += 1;
-                out
+                CellInfo {
+                    possibilities: ((2 << size) - 1),
+                    block_id,
+                }
             })
         })
         .collect();
 
+    /*
     for row in cell_blocks.chunks_exact(size) {
         let s: String = row.iter().map(|c| format!("{:02}", c)).collect();
         println!("{}", s);
     }
+    */
 
-    let constraints_pair = parsed_iter.next().unwrap();
     let constraints: Vec<_> = constraints_pair
         .into_inner()
         .map(|pair| {
@@ -108,5 +131,27 @@ pub fn parse_game_id(raw: &str) {
             Constraint { op, val }
         })
         .collect();
-    println!("{:?}", constraints);
+    GameState {
+        desc,
+        size,
+        blocks: constraints,
+        cells: cell_blocks,
+    }
+}
+
+impl GameState {
+    pub fn write_save(&self, mut out: impl Write) {
+        let mut write = |key, value: &str| {
+            write!(out, "{}:{}:{}\n", key, value.len(), value).unwrap();
+        };
+
+        write("SAVEFILE", "Simon Tatham's Portable Puzzle Collection");
+        write("VERSION ", "1");
+        write("GAME    ", "Keen");
+        write("PARAMS  ", &format!("{}du", self.size));
+        write("CPARAMS ", &format!("{}du", self.size));
+        write("DESC    ", &self.desc);
+        write("NSTATES ", "1");
+        write("STATEPOS", "1");
+    }
 }
