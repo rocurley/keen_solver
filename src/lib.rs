@@ -139,11 +139,25 @@ pub fn parse_game_id(raw: &str) -> GameState {
     }
 }
 
+fn iterate_possibilities(size: usize, possiblities: Bitmask) -> impl Iterator<Item = usize> {
+    (0..size)
+        .filter(move |i| possiblities & (1 << i) > 0)
+        .map(|i| i + 1)
+}
+
 impl GameState {
     pub fn write_save(&self, mut out: impl Write) {
         let mut write = |key, value: &str| {
             write!(out, "{}:{}:{}\n", key, value.len(), value).unwrap();
         };
+        let pencil_moves: Vec<_> = self
+            .cells
+            .iter()
+            .enumerate()
+            .flat_map(|(i, cell)| {
+                iterate_possibilities(self.size, cell.possibilities).map(move |x| (i, x))
+            })
+            .collect();
 
         write("SAVEFILE", "Simon Tatham's Portable Puzzle Collection");
         write("VERSION ", "1");
@@ -151,7 +165,13 @@ impl GameState {
         write("PARAMS  ", &format!("{}du", self.size));
         write("CPARAMS ", &format!("{}du", self.size));
         write("DESC    ", &self.desc);
-        write("NSTATES ", "1");
-        write("STATEPOS", "1");
+        write("NSTATES ", &format!("{}", pencil_moves.len()));
+        write("STATEPOS", &format!("{}", pencil_moves.len()));
+        for (i, x) in pencil_moves {
+            write(
+                "MOVE    ",
+                &format!("P{},{},{}", i % self.size, i / self.size, x),
+            );
+        }
     }
 }
