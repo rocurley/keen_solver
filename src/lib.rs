@@ -1,3 +1,5 @@
+use std::collections::{HashMap, HashSet};
+
 use pest::Parser;
 use pest_derive::Parser;
 use union_find::{QuickUnionUf, UnionByRank, UnionFind};
@@ -50,17 +52,17 @@ pub fn parse_game_id(raw: &str) {
             i += 1;
         }
     }
-    let lines_str: String = lines.iter().map(|b| if *b { '|' } else { '_' }).collect();
+    //let lines_str: String = lines.iter().map(|b| if *b { '|' } else { '_' }).collect();
     //println!("{}", lines_str);
     //println!("||__||||_|_|||__||_|_||_|_|_|__||||_|||||_|_|||_|||||||_||_|");
 
-    let mut blocks = QuickUnionUf::<UnionByRank>::new(size * size);
+    let mut blocks_uf = QuickUnionUf::<UnionByRank>::new(size * size);
     let mut lines_row_cols = lines.chunks_exact(size - 1);
     for y in 0..size {
         let row_lines = lines_row_cols.next().unwrap();
         for (x, line) in row_lines.iter().enumerate() {
             if !line {
-                blocks.union(y * size + x, y * size + x + 1);
+                blocks_uf.union(y * size + x, y * size + x + 1);
             }
         }
     }
@@ -68,14 +70,25 @@ pub fn parse_game_id(raw: &str) {
         let col_lines = lines_row_cols.next().unwrap();
         for (y, line) in col_lines.iter().enumerate() {
             if !line {
-                blocks.union(y * size + x, (y + 1) * size + x);
+                blocks_uf.union(y * size + x, (y + 1) * size + x);
             }
         }
     }
-    for y in 0..size {
-        let s: String = (0..size)
-            .map(|x| format!("{:02}", blocks.find(y * size + x)))
-            .collect();
+
+    let mut seen = HashMap::new();
+    let mut next_block_id = 0;
+    let cell_blocks: Vec<usize> = (0..size * size)
+        .map(|i| {
+            *seen.entry(blocks_uf.find(i)).or_insert_with(|| {
+                let out = next_block_id;
+                next_block_id += 1;
+                out
+            })
+        })
+        .collect();
+
+    for row in cell_blocks.chunks_exact(size) {
+        let s: String = row.iter().map(|c| format!("{:02}", c)).collect();
         println!("{}", s);
     }
 
