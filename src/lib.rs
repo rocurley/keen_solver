@@ -23,6 +23,43 @@ struct Constraint {
     val: i32,
 }
 
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+struct BlockInfo {
+    constraint: Constraint,
+    size: usize,
+}
+
+impl BlockInfo {
+    fn Possibilities<'a>(&'a self, board_size: usize) -> impl 'a + Iterator<Item = Vec<i32>> {
+        let is_linear = self.size == 2;
+        let mut it: Box<dyn Iterator<Item = (i32, Vec<i32>)>> =
+            Box::new((1..(board_size as i32) + 1).map(|x| (x, vec![x])));
+        for _ in 1..self.size {
+            it = Box::new(it.flat_map(move |(mut lb, v)| {
+                if is_linear {
+                    lb += 1;
+                }
+                (lb..(board_size as i32) + 1).map(move |x| {
+                    let mut v2 = v.clone();
+                    v2.push(x);
+                    (x, v2)
+                })
+            }));
+        }
+        it.map(|(_, v)| v).filter(|v| match self.constraint.op {
+            Operator::Add => v.iter().sum::<i32>() == self.constraint.val,
+            Operator::Mul => v.iter().product::<i32>() == self.constraint.val,
+            Operator::Sub => {
+                v[0] - v[1] == self.constraint.val || v[1] - v[0] == self.constraint.val
+            }
+            Operator::Div => {
+                (v[0] % v[1] == 0 && v[0] / v[1] == self.constraint.val)
+                    || (v[1] % v[0] == 0 && v[1] / v[0] == self.constraint.val)
+            }
+        })
+    }
+}
+
 type Bitmask = u8;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -36,7 +73,7 @@ pub struct GameState {
     desc: String,
     size: usize,
     cells: Vec<CellInfo>,
-    blocks: Vec<Constraint>,
+    blocks: Vec<BlockInfo>,
 }
 
 pub fn parse_game_id(raw: &str) -> GameState {
@@ -94,29 +131,7 @@ pub fn parse_game_id(raw: &str) -> GameState {
         }
     }
 
-    let mut seen = HashMap::new();
-    let mut next_block_id = 0;
-    let cell_blocks: Vec<CellInfo> = (0..size * size)
-        .map(|i| {
-            *seen.entry(blocks_uf.find(i)).or_insert_with(|| {
-                let block_id = next_block_id;
-                next_block_id += 1;
-                CellInfo {
-                    possibilities: ((2 << size) - 1),
-                    block_id,
-                }
-            })
-        })
-        .collect();
-
-    /*
-    for row in cell_blocks.chunks_exact(size) {
-        let s: String = row.iter().map(|c| format!("{:02}", c)).collect();
-        println!("{}", s);
-    }
-    */
-
-    let constraints: Vec<_> = constraints_pair
+    let mut blocks: Vec<_> = constraints_pair
         .into_inner()
         .map(|pair| {
             let (op_str, val_str) = pair.as_str().split_at(1);
@@ -128,13 +143,34 @@ pub fn parse_game_id(raw: &str) -> GameState {
                 _ => panic!("unknown operator"),
             };
             let val = val_str.parse().unwrap();
-            Constraint { op, val }
+            BlockInfo {
+                constraint: Constraint { op, val },
+                size: 0,
+            }
+        })
+        .collect();
+
+    let mut seen = HashMap::new();
+    let mut next_block_id = 0;
+    let cell_blocks: Vec<CellInfo> = (0..size * size)
+        .map(|i| {
+            let block_id = *seen.entry(blocks_uf.find(i)).or_insert_with(|| {
+                let block_id = next_block_id;
+                next_block_id += 1;
+                block_id
+            });
+            blocks[block_id].size += 1;
+            CellInfo {
+                // TODO: somehow wrong for the last cell?
+                possibilities: ((2 << size) - 1),
+                block_id,
+            }
         })
         .collect();
     GameState {
         desc,
         size,
-        blocks: constraints,
+        blocks,
         cells: cell_blocks,
     }
 }
@@ -146,6 +182,24 @@ fn iterate_possibilities(size: usize, possiblities: Bitmask) -> impl Iterator<It
 }
 
 impl GameState {
+    pub fn filter_by_block_possibilities(&mut self) {
+        let block_possibilities: Vec<Bitmask> = self
+            .blocks
+            .iter()
+            .map(|b| {
+                let mut mask = 0;
+                for possibility in b.Possibilities(self.size) {
+                    for x in possibility {
+                        mask |= 1 << (x - 1);
+                    }
+                }
+                mask
+            })
+            .collect();
+        for cell in self.cells.iter_mut() {
+            cell.possibilities &= block_possibilities[cell.block_id];
+        }
+    }
     pub fn write_save(&self, mut out: impl Write) {
         let mut write = |key, value: &str| {
             write!(out, "{}:{}:{}\n", key, value.len(), value).unwrap();
