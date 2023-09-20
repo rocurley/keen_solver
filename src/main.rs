@@ -9,7 +9,9 @@ const hard_game: &str = "6:__b_3aa__b_aa_a3b_3a_4aa__a_6a_a_,a5s1a8s2a7m4s2a12m6
 fn main() {
     let mut state = keen_solver::parse_game_id(easy_game);
     state.filter_by_blocks_simple();
-    state.exclude_n_in_n();
-    state.filter_by_blocks_conditional();
+    for _ in 0..100 {
+        state.exclude_n_in_n();
+        state.filter_by_blocks_conditional();
+    }
     state.write_save(stdout());
 }

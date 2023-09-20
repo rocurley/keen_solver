@@ -84,6 +84,9 @@ impl BlockInfo {
                     continue 'outer;
                 }
             }
+            if !self.constraint.satisfied_by(&values) {
+                continue;
+            }
             for (pos, x) in new_possibilities.iter_mut().zip(values.iter()) {
                 *pos |= (1 << (x - 1));
             }
@@ -341,5 +344,25 @@ impl GameState {
                 &format!("R{},{},{}", i % self.size, i / self.size, x),
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{BlockInfo, Constraint};
+
+    #[test]
+    fn test_conditional_possibilities() {
+        let c = Constraint {
+            op: crate::Operator::Div,
+            val: 2,
+        };
+        let b = BlockInfo {
+            constraint: c,
+            cells: vec![0, 1],
+        };
+        let possibilities = vec![1 << (4 - 1), 1 << (2 - 1) | 1 << (3 - 1) | 1 << (6 - 1)];
+        let result = b.conditional_possibilities(&possibilities, 6);
+        assert_eq!(result, vec![1 << (4 - 1), 1 << (2 - 1)]);
     }
 }
