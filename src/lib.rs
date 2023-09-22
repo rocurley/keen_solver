@@ -41,6 +41,7 @@ impl Constraint {
 struct BlockInfo {
     constraint: Constraint,
     cells: Vec<usize>,
+    interacting_blocks: Vec<usize>,
 }
 
 impl BlockInfo {
@@ -48,6 +49,11 @@ impl BlockInfo {
         let i0 = self.cells[0];
         self.cells.iter().all(|i| i / board_size == i0 / board_size)
             || self.cells.iter().all(|i| i % board_size == i0 % board_size)
+    }
+    fn add_interacting(&mut self, ix: usize) {
+        if !self.interacting_blocks.contains(&ix) {
+            self.interacting_blocks.push(ix);
+        }
     }
     fn possibilities<'a>(&'a self, board_size: usize) -> impl 'a + Iterator<Item = Vec<i32>> {
         let is_linear = self.is_linear(board_size);
@@ -68,30 +74,57 @@ impl BlockInfo {
         it.map(|(_, v)| v)
             .filter(|v| self.constraint.satisfied_by(v))
     }
+    fn joint_possibilities<'a>(
+        &self,
+        possibilities: &'a [Bitmask],
+        board_size: usize,
+    ) -> JointPossibilities<'a> {
+        let mut values = vec![1; self.cells.len()];
+        values[0] = 0;
+        JointPossibilities {
+            constraint: self.constraint,
+            possibilities,
+            board_size,
+            values,
+        }
+    }
     fn conditional_possibilities(
         &self,
         possibilities: &[Bitmask],
         board_size: usize,
     ) -> Vec<Bitmask> {
-        let mut values = vec![1; self.cells.len()];
         let mut new_possibilities = vec![0; self.cells.len()];
-        let mut first = true;
-        'outer: while first || next_values_list(board_size, &mut values) {
-            first = false;
-            // TODO: colinear filter
-            for (pos, x) in possibilities.iter().zip(values.iter()) {
+        let mut iter = self.joint_possibilities(possibilities, board_size);
+        while let Some(values) = iter.next() {
+            for (pos, x) in new_possibilities.iter_mut().zip(values.iter()) {
+                *pos |= 1 << (x - 1);
+            }
+        }
+        new_possibilities
+    }
+}
+
+struct JointPossibilities<'a> {
+    constraint: Constraint,
+    possibilities: &'a [Bitmask],
+    board_size: usize,
+    values: Vec<i32>,
+}
+
+impl<'a> JointPossibilities<'a> {
+    pub fn next(&mut self) -> Option<&[i32]> {
+        'outer: while next_values_list(self.board_size, &mut self.values) {
+            for (pos, x) in self.possibilities.iter().zip(self.values.iter()) {
                 if pos & (1 << (x - 1)) == 0 {
                     continue 'outer;
                 }
             }
-            if !self.constraint.satisfied_by(&values) {
+            if !self.constraint.satisfied_by(&self.values) {
                 continue;
             }
-            for (pos, x) in new_possibilities.iter_mut().zip(values.iter()) {
-                *pos |= (1 << (x - 1));
-            }
+            return Some(&self.values);
         }
-        new_possibilities
+        None
     }
 }
 
@@ -193,6 +226,7 @@ pub fn parse_game_id(raw: &str) -> GameState {
             BlockInfo {
                 constraint: Constraint { op, val },
                 cells: Vec::new(),
+                interacting_blocks: Vec::new(),
             }
         })
         .collect();
@@ -213,6 +247,23 @@ pub fn parse_game_id(raw: &str) -> GameState {
             }
         })
         .collect();
+    for (i, cell) in cells.iter().enumerate() {
+        let block_id = cell.block_id;
+        let x = i % size;
+        let y = i / size;
+        for x2 in 0..size {
+            let other_block_id = cells[x2 + y * size].block_id;
+            if other_block_id != block_id {
+                blocks[block_id].add_interacting(other_block_id);
+            }
+        }
+        for y2 in 0..size {
+            let other_block_id = cells[x + y2 * size].block_id;
+            if other_block_id != block_id {
+                blocks[block_id].add_interacting(other_block_id);
+            }
+        }
+    }
     GameState {
         desc,
         size,
@@ -286,7 +337,6 @@ impl GameState {
             }
         }
     }
-    // TODO: Does not appear to work. Add test for conditional_possibilities?
     pub fn filter_by_blocks_conditional(&mut self) {
         for block in &self.blocks {
             let possibilities: Vec<Bitmask> = block
@@ -316,7 +366,7 @@ impl GameState {
             .cells
             .iter()
             .enumerate()
-            .filter(|(i, cell)| Bitmask::is_power_of_two(cell.possibilities))
+            .filter(|(_, cell)| Bitmask::is_power_of_two(cell.possibilities))
             .flat_map(|(i, cell)| {
                 iterate_possibilities(self.size, cell.possibilities).map(move |x| (i, x))
             })
@@ -345,6 +395,75 @@ impl GameState {
             );
         }
     }
+    pub fn solved(&self) -> bool {
+        self.cells
+            .iter()
+            .all(|cell| Bitmask::is_power_of_two(cell.possibilities))
+    }
+    pub fn get_block_possibilities(&self, i: usize) -> Vec<Bitmask> {
+        self.blocks[i]
+            .cells
+            .iter()
+            .map(|&i| self.cells[i].possibilities)
+            .collect()
+    }
+    pub fn set_block_possibilities(&mut self, i: usize, new_masks: &[Bitmask]) {
+        for (&i, &new_mask) in self.blocks[i].cells.iter().zip(new_masks.iter()) {
+            self.cells[i].possibilities = new_mask;
+        }
+    }
+    // Depth 1 for now
+    pub fn compatibility_search(&mut self) {
+        for block_id in 0..self.blocks.len() {
+            let block = &self.blocks[block_id];
+            let masks = self.get_block_possibilities(block_id);
+            let mut new_masks = vec![0; block.cells.len()];
+            let mut iter = block.joint_possibilities(&masks, self.size);
+            while let Some(p) = iter.next() {
+                let neighbors_compatible = block.interacting_blocks.iter().all(|&neighbor_id| {
+                    let neighbor = &self.blocks[neighbor_id];
+                    let neighbor_masks = self.get_block_possibilities(neighbor_id);
+                    let mut neighbor_iter =
+                        neighbor.joint_possibilities(&neighbor_masks, self.size);
+                    while let Some(np) = neighbor_iter.next() {
+                        if joint_possibilities_compatible(
+                            self.size,
+                            p,
+                            &block.cells,
+                            np,
+                            &neighbor.cells,
+                        ) {
+                            return true;
+                        }
+                    }
+                    false
+                });
+                if neighbors_compatible {
+                    for (pos, x) in new_masks.iter_mut().zip(p.iter()) {
+                        *pos |= 1 << (x - 1);
+                    }
+                }
+            }
+            self.set_block_possibilities(block_id, &new_masks);
+        }
+    }
+}
+
+fn joint_possibilities_compatible(
+    size: usize,
+    l_values: &[i32],
+    l_cells: &[usize],
+    r_values: &[i32],
+    r_cells: &[usize],
+) -> bool {
+    for (x, i) in l_values.iter().zip(l_cells.iter()) {
+        for (y, j) in r_values.iter().zip(r_cells.iter()) {
+            if x == y && (i % size == j % size || i / size == j / size) {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 #[cfg(test)]
@@ -360,6 +479,7 @@ mod tests {
         let b = BlockInfo {
             constraint: c,
             cells: vec![0, 1],
+            interacting_blocks: Vec::new(),
         };
         let possibilities = vec![1 << (4 - 1), 1 << (2 - 1) | 1 << (3 - 1) | 1 << (6 - 1)];
         let result = b.conditional_possibilities(&possibilities, 6);
