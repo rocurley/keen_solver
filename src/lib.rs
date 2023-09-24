@@ -505,8 +505,57 @@ impl GameState {
         seen[block_id] = None;
         res
     }
-    #[cfg(test)]
-    fn from_save(r: impl std::io::BufRead) -> Self {
+    pub fn must_be_in_block(&mut self) -> bool {
+        let mut made_progress = false;
+        for (block_id, block) in self.blocks.iter().enumerate() {
+            let mut row_required = vec![(1 << self.size) - 1; self.size];
+            let mut col_required = vec![(1 << self.size) - 1; self.size];
+            let masks = self.get_block_possibilities(block_id);
+            let mut iter = block.joint_possibilities(&masks, self.size);
+            while let Some(joint_possibilities) = iter.next() {
+                let mut row_vals = vec![0; self.size];
+                let mut col_vals = vec![0; self.size];
+                for (i, x) in block.cells.iter().zip(joint_possibilities.iter()) {
+                    row_vals[i / self.size] |= 1 << x - 1;
+                    col_vals[i % self.size] |= 1 << x - 1;
+                }
+                for (m1, m2) in row_required.iter_mut().zip(row_vals.into_iter()) {
+                    *m1 &= m2;
+                }
+                for (m1, m2) in col_required.iter_mut().zip(col_vals.into_iter()) {
+                    *m1 &= m2;
+                }
+            }
+            for (i, cell) in self.cells.iter_mut().enumerate() {
+                if cell.block_id == block_id {
+                    continue;
+                }
+                let original = cell.possibilities;
+                cell.possibilities &= !row_required[i / self.size];
+                cell.possibilities &= !col_required[i % self.size];
+                made_progress |= original != cell.possibilities;
+            }
+        }
+        made_progress
+    }
+    pub fn try_solvers(&mut self) -> bool {
+        if self.exclude_n_in_n() {
+            return true;
+        }
+        if self.filter_by_blocks_conditional() {
+            return true;
+        }
+        if self.must_be_in_block() {
+            return true;
+        }
+        for depth in 0..3 {
+            if self.compatibility_search(depth) {
+                return true;
+            }
+        }
+        return false;
+    }
+    pub fn from_save(r: impl std::io::BufRead) -> Self {
         let mut kvs = HashMap::new();
         for line in r.lines() {
             let line = line.unwrap();
