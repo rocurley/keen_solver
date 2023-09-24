@@ -4,7 +4,6 @@ use pest::Parser;
 use pest_derive::Parser;
 use union_find::{QuickUnionUf, UnionByRank, UnionFind};
 
-// 6:__b_3aa__b_aa_a3b_3a_4aa__a_6a_a_,a5s1a8s2a7m4s2a12m6d2s1m6m4a8m24d2s2
 #[derive(Parser)]
 #[grammar = "game_id.pest"]
 struct GameIDParser;
@@ -15,6 +14,7 @@ enum Operator {
     Mul,
     Sub,
     Div,
+    Any, // Used for testing only
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -33,6 +33,7 @@ impl Constraint {
                 (v[0] % v[1] == 0 && v[0] / v[1] == self.val)
                     || (v[1] % v[0] == 0 && v[1] / v[0] == self.val)
             }
+            Operator::Any => true,
         }
     }
 }
@@ -422,33 +423,17 @@ impl GameState {
         }
         changed
     }
-    // Depth 1 for now
-    pub fn compatibility_search(&mut self) -> bool {
+    pub fn compatibility_search(&mut self, depth: usize) -> bool {
         let mut made_progress = false;
         for block_id in 0..self.blocks.len() {
             let block = &self.blocks[block_id];
             let masks = self.get_block_possibilities(block_id);
             let mut new_masks = vec![0; block.cells.len()];
             let mut iter = block.joint_possibilities(&masks, self.size);
+            let mut seen = vec![None; self.size * self.size];
             while let Some(p) = iter.next() {
-                let neighbors_compatible = block.interacting_blocks.iter().all(|&neighbor_id| {
-                    let neighbor = &self.blocks[neighbor_id];
-                    let neighbor_masks = self.get_block_possibilities(neighbor_id);
-                    let mut neighbor_iter =
-                        neighbor.joint_possibilities(&neighbor_masks, self.size);
-                    while let Some(np) = neighbor_iter.next() {
-                        if joint_possibilities_compatible(
-                            self.size,
-                            p,
-                            &block.cells,
-                            np,
-                            &neighbor.cells,
-                        ) {
-                            return true;
-                        }
-                    }
-                    false
-                });
+                let neighbors_compatible =
+                    self.compatibility_search_inner(depth, block_id, p, &mut seen);
                 if neighbors_compatible {
                     for (pos, x) in new_masks.iter_mut().zip(p.iter()) {
                         *pos |= 1 << (x - 1);
@@ -458,6 +443,58 @@ impl GameState {
             made_progress |= self.set_block_possibilities(block_id, &new_masks);
         }
         made_progress
+    }
+
+    // checks if there's any solution consistent with seen
+    fn compatibility_search_inner(
+        &self,
+        depth: usize,
+        block_id: usize,
+        block_joint_possibilities: &[i32],
+        seen: &mut [Option<Vec<i32>>],
+    ) -> bool {
+        if depth == 0 {
+            return true;
+        }
+        let block = &self.blocks[block_id];
+        seen[block_id] = Some(block_joint_possibilities.to_vec());
+        let res = block.interacting_blocks.iter().all(|&neighbor_id| {
+            let neighbor = &self.blocks[neighbor_id];
+            if let Some(neighbor_joint_possiblities) = seen[neighbor_id].as_ref() {
+                return joint_possibilities_compatible(
+                    self.size,
+                    &block_joint_possibilities,
+                    &block.cells,
+                    neighbor_joint_possiblities,
+                    &neighbor.cells,
+                );
+            }
+            let neighbor_masks = self.get_block_possibilities(neighbor_id);
+            let mut neighbor_iter = neighbor.joint_possibilities(&neighbor_masks, self.size);
+            // Not an actual iterator, can't use .any()
+            while let Some(neighbor_joint_possiblities) = neighbor_iter.next() {
+                if !joint_possibilities_compatible(
+                    self.size,
+                    &block_joint_possibilities,
+                    &block.cells,
+                    neighbor_joint_possiblities,
+                    &neighbor.cells,
+                ) {
+                    continue;
+                }
+                if self.compatibility_search_inner(
+                    depth - 1,
+                    neighbor_id,
+                    neighbor_joint_possiblities,
+                    seen,
+                ) {
+                    return true;
+                }
+            }
+            false
+        });
+        seen[block_id] = None;
+        res
     }
 }
 
