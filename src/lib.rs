@@ -79,7 +79,7 @@ impl BlockInfo {
             .filter(|v| self.constraint.satisfied_by(v))
     }
     fn joint_possibilities<'a>(
-        &self,
+        &'a self,
         possibilities: &'a [Bitmask],
         board_size: usize,
     ) -> JointPossibilities<'a> {
@@ -87,6 +87,7 @@ impl BlockInfo {
         values[0] = 0;
         JointPossibilities {
             constraint: self.constraint,
+            cells: &self.cells,
             possibilities,
             board_size,
             values,
@@ -111,6 +112,7 @@ impl BlockInfo {
 struct JointPossibilities<'a> {
     constraint: Constraint,
     possibilities: &'a [Bitmask],
+    cells: &'a [usize],
     board_size: usize,
     values: Vec<i32>,
 }
@@ -125,6 +127,15 @@ impl<'a> JointPossibilities<'a> {
             }
             if !self.constraint.satisfied_by(&self.values) {
                 continue;
+            }
+            for ((i, x), ci) in self.values.iter().enumerate().zip(self.cells.iter()) {
+                for (y, cj) in self.values[i + 1..].iter().zip(self.cells[i + 1..].iter()) {
+                    if x == y {
+                        if ci / 6 == cj / 6 || ci % 6 == cj % 6 {
+                            continue 'outer;
+                        }
+                    }
+                }
             }
             return Some(&self.values);
         }
@@ -572,5 +583,12 @@ mod tests {
         let mut new_save = Vec::new();
         gs.write_save(&mut new_save);
         assert_eq!(save, new_save);
+    }
+    #[test]
+    fn test_depth_2_search() {
+        let save = std::fs::read("test_data/search_depth_2_test_case").unwrap();
+        let mut gs = GameState::from_save(save.as_slice());
+        gs.compatibility_search(3);
+        assert_eq!(1 << 3 - 1, gs.cells[5].possibilities);
     }
 }
