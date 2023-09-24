@@ -7,10 +7,17 @@ fn main() {
     for game_seed in stdin.lock().lines() {
         let mut state = keen_solver::parse_game_id(&game_seed.unwrap());
         state.filter_by_blocks_simple();
-        for _ in 0..100 {
-            state.exclude_n_in_n();
-            state.filter_by_blocks_conditional();
-            state.compatibility_search();
+        loop {
+            if state.exclude_n_in_n() {
+                continue;
+            }
+            if state.filter_by_blocks_conditional() {
+                continue;
+            }
+            if state.compatibility_search() {
+                continue;
+            }
+            break;
         }
         if state.solved() {
             continue;

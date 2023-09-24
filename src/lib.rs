@@ -305,7 +305,8 @@ impl GameState {
             cell.possibilities &= block_possibilities[cell.block_id];
         }
     }
-    pub fn exclude_n_in_n(&mut self) {
+    pub fn exclude_n_in_n(&mut self) -> bool {
+        let mut made_progress = false;
         for transposed in [true, false] {
             for y in 0..self.size {
                 for cell_mask in 1..1 << self.size {
@@ -324,11 +325,13 @@ impl GameState {
                         Ordering::Equal => {
                             for x in 0..self.size {
                                 let ix = index(self.size, x, y, transposed);
+                                let old = self.cells[ix].possibilities;
                                 if (1 << x) & cell_mask > 0 {
                                     self.cells[ix].possibilities &= seen;
                                 } else {
                                     self.cells[ix].possibilities &= !seen;
                                 }
+                                made_progress |= old != self.cells[ix].possibilities;
                             }
                         }
                         Ordering::Greater => {}
@@ -336,8 +339,10 @@ impl GameState {
                 }
             }
         }
+        made_progress
     }
-    pub fn filter_by_blocks_conditional(&mut self) {
+    pub fn filter_by_blocks_conditional(&mut self) -> bool {
+        let mut made_progress = false;
         for block in &self.blocks {
             let possibilities: Vec<Bitmask> = block
                 .cells
@@ -346,9 +351,11 @@ impl GameState {
                 .collect();
             let new_possibilities = block.conditional_possibilities(&possibilities, self.size);
             for (&i, p) in block.cells.iter().zip(new_possibilities.into_iter()) {
+                made_progress |= self.cells[i].possibilities != p;
                 self.cells[i].possibilities = p;
             }
         }
+        made_progress
     }
     pub fn write_save(&self, mut out: impl Write) {
         let mut write = |key, value: &str| {
@@ -407,13 +414,17 @@ impl GameState {
             .map(|&i| self.cells[i].possibilities)
             .collect()
     }
-    pub fn set_block_possibilities(&mut self, i: usize, new_masks: &[Bitmask]) {
+    pub fn set_block_possibilities(&mut self, i: usize, new_masks: &[Bitmask]) -> bool {
+        let mut changed = false;
         for (&i, &new_mask) in self.blocks[i].cells.iter().zip(new_masks.iter()) {
+            changed |= self.cells[i].possibilities != new_mask;
             self.cells[i].possibilities = new_mask;
         }
+        changed
     }
     // Depth 1 for now
-    pub fn compatibility_search(&mut self) {
+    pub fn compatibility_search(&mut self) -> bool {
+        let mut made_progress = false;
         for block_id in 0..self.blocks.len() {
             let block = &self.blocks[block_id];
             let masks = self.get_block_possibilities(block_id);
@@ -444,8 +455,9 @@ impl GameState {
                     }
                 }
             }
-            self.set_block_possibilities(block_id, &new_masks);
+            made_progress |= self.set_block_possibilities(block_id, &new_masks);
         }
+        made_progress
     }
 }
 
