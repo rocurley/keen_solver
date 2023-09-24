@@ -1,7 +1,4 @@
-use std::{
-    collections::HashMap,
-    io::{BufRead, Read, Write},
-};
+use std::{collections::HashMap, io::Write};
 
 use pest::Parser;
 use pest_derive::Parser;
@@ -17,7 +14,6 @@ enum Operator {
     Mul,
     Sub,
     Div,
-    Any, // Used for testing only
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -36,7 +32,6 @@ impl Constraint {
                 (v[0] % v[1] == 0 && v[0] / v[1] == self.val)
                     || (v[1] % v[0] == 0 && v[1] / v[0] == self.val)
             }
-            Operator::Any => true,
         }
     }
 }
@@ -510,7 +505,8 @@ impl GameState {
         seen[block_id] = None;
         res
     }
-    fn from_save(r: impl BufRead) -> Self {
+    #[cfg(test)]
+    fn from_save(r: impl std::io::BufRead) -> Self {
         let mut kvs = HashMap::new();
         for line in r.lines() {
             let line = line.unwrap();

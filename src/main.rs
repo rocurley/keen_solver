@@ -14,7 +14,7 @@ fn main() {
             if state.filter_by_blocks_conditional() {
                 continue;
             }
-            for depth in 0..4 {
+            for depth in 0..3 {
                 if state.compatibility_search(depth) {
                     continue 'outer;
                 }
