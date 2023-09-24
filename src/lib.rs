@@ -1,4 +1,7 @@
-use std::{collections::HashMap, io::Write};
+use std::{
+    collections::HashMap,
+    io::{BufRead, Read, Write},
+};
 
 use pest::Parser;
 use pest_derive::Parser;
@@ -496,6 +499,34 @@ impl GameState {
         seen[block_id] = None;
         res
     }
+    fn from_save(r: impl BufRead) -> Self {
+        let mut kvs = HashMap::new();
+        for line in r.lines() {
+            let line = line.unwrap();
+            let mut split = line.split(":");
+            let key = split.next().unwrap().trim().to_owned();
+            split.next().unwrap();
+            let val = split.next().unwrap().to_owned();
+            kvs.entry(key).or_insert_with(Vec::new).push(val);
+        }
+        let params = &kvs["PARAMS"][0];
+        let size: usize = params[..params.len() - 2].parse().unwrap();
+        let desc = &kvs["DESC"][0];
+        let game_id = format!("{}:{}", size, desc);
+        let mut out = parse_game_id(&game_id);
+        for cell in out.cells.iter_mut() {
+            cell.possibilities = 0;
+        }
+        for raw_move in kvs["MOVE"].iter() {
+            let mut split = raw_move[1..].split(",");
+            let x: usize = split.next().unwrap().parse().unwrap();
+            let y: usize = split.next().unwrap().parse().unwrap();
+            let v: usize = split.next().unwrap().parse().unwrap();
+            let i = x + y * size;
+            out.cells[i].possibilities |= 1 << v - 1;
+        }
+        out
+    }
 }
 
 fn joint_possibilities_compatible(
@@ -517,7 +548,7 @@ fn joint_possibilities_compatible(
 
 #[cfg(test)]
 mod tests {
-    use crate::{BlockInfo, Constraint};
+    use crate::{BlockInfo, Constraint, GameState};
 
     #[test]
     fn test_conditional_possibilities() {
@@ -533,5 +564,13 @@ mod tests {
         let possibilities = vec![1 << (4 - 1), 1 << (2 - 1) | 1 << (3 - 1) | 1 << (6 - 1)];
         let result = b.conditional_possibilities(&possibilities, 6);
         assert_eq!(result, vec![1 << (4 - 1), 1 << (2 - 1)]);
+    }
+    #[test]
+    fn test_load() {
+        let save = std::fs::read("test_data/search_depth_2_test_case").unwrap();
+        let gs = GameState::from_save(save.as_slice());
+        let mut new_save = Vec::new();
+        gs.write_save(&mut new_save);
+        assert_eq!(save, new_save);
     }
 }
