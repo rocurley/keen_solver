@@ -389,8 +389,10 @@ impl GameState {
                 }
             }
         }
-        self.blocks_from_cells();
-        self.cells_from_blocks();
+        if made_progress {
+            self.blocks_from_cells();
+            self.cells_from_blocks();
+        }
         made_progress
     }
     pub fn write_save(&self, mut out: impl Write) {
@@ -474,7 +476,9 @@ impl GameState {
                 made_progress = true;
             }
         }
-        self.cells_from_blocks();
+        if made_progress {
+            self.cells_from_blocks();
+        }
         made_progress
     }
 
@@ -552,8 +556,10 @@ impl GameState {
                 made_progress |= original != cell.possibilities;
             }
         }
-        self.blocks_from_cells();
-        self.cells_from_blocks();
+        if made_progress {
+            self.blocks_from_cells();
+            self.cells_from_blocks();
+        }
         made_progress
     }
     pub fn try_solvers(&mut self, mut stats: Option<&mut SolverStats>) -> bool {
