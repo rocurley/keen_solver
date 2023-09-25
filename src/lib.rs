@@ -41,7 +41,10 @@ struct BlockInfo {
     constraint: Constraint,
     cells: Vec<usize>,
     interacting_blocks: Vec<usize>,
+    possibilities: Vec<Vec<i32>>,
 }
+
+const SEARCH_DEPTH: usize = 5;
 
 impl BlockInfo {
     fn is_linear(&self, board_size: usize) -> bool {
@@ -102,6 +105,15 @@ impl BlockInfo {
         }
         new_possibilities
     }
+    fn fill_in_possibilities(&mut self, board_size: usize) {
+        let dummy_cell_possibilities = vec![(1 << board_size) - 1; self.cells.len()];
+        let mut iter = self.joint_possibilities(&dummy_cell_possibilities, board_size);
+        let mut possiblities = Vec::new();
+        while let Some(p) = iter.next() {
+            possiblities.push(p.to_vec());
+        }
+        self.possibilities = possiblities;
+    }
 }
 
 struct JointPossibilities<'a> {
@@ -126,7 +138,9 @@ impl<'a> JointPossibilities<'a> {
             for ((i, x), ci) in self.values.iter().enumerate().zip(self.cells.iter()) {
                 for (y, cj) in self.values[i + 1..].iter().zip(self.cells[i + 1..].iter()) {
                     if x == y {
-                        if ci / 6 == cj / 6 || ci % 6 == cj % 6 {
+                        if ci / self.board_size == cj / self.board_size
+                            || ci % self.board_size == cj % self.board_size
+                        {
                             continue 'outer;
                         }
                     }
@@ -237,6 +251,7 @@ pub fn parse_game_id(raw: &str) -> GameState {
                 constraint: Constraint { op, val },
                 cells: Vec::new(),
                 interacting_blocks: Vec::new(),
+                possibilities: Vec::new(),
             }
         })
         .collect();
@@ -274,12 +289,17 @@ pub fn parse_game_id(raw: &str) -> GameState {
             }
         }
     }
-    GameState {
+    for block in blocks.iter_mut() {
+        block.fill_in_possibilities(size);
+    }
+    let mut out = GameState {
         desc,
         size,
         blocks,
         cells,
-    }
+    };
+    out.cells_from_blocks();
+    out
 }
 
 fn iterate_possibilities(size: usize, possiblities: Bitmask) -> impl Iterator<Item = usize> {
@@ -297,6 +317,26 @@ fn index(size: usize, x: usize, y: usize, transposed: bool) -> usize {
 }
 
 impl GameState {
+    fn cells_from_blocks(&mut self) {
+        for block in &self.blocks {
+            for (i, &cell_id) in block.cells.iter().enumerate() {
+                let mut mask = 0;
+                for possibility in &block.possibilities {
+                    mask |= 1 << (possibility[i] - 1);
+                }
+                self.cells[cell_id].possibilities &= mask;
+            }
+        }
+    }
+    pub fn blocks_from_cells(&mut self) {
+        for block in &mut self.blocks {
+            block.possibilities.retain(|p| {
+                p.iter().zip(block.cells.iter()).all(|(x, &cell_id)| {
+                    self.cells[cell_id].possibilities & (1 << (x - 1)) != 0
+                })
+            });
+        }
+    }
     pub fn filter_by_blocks_simple(&mut self) {
         let block_possibilities: Vec<Bitmask> = self
             .blocks
@@ -349,22 +389,8 @@ impl GameState {
                 }
             }
         }
-        made_progress
-    }
-    pub fn filter_by_blocks_conditional(&mut self) -> bool {
-        let mut made_progress = false;
-        for block in &self.blocks {
-            let possibilities: Vec<Bitmask> = block
-                .cells
-                .iter()
-                .map(|&i| self.cells[i].possibilities)
-                .collect();
-            let new_possibilities = block.conditional_possibilities(&possibilities, self.size);
-            for (&i, p) in block.cells.iter().zip(new_possibilities.into_iter()) {
-                made_progress |= self.cells[i].possibilities != p;
-                self.cells[i].possibilities = p;
-            }
-        }
+        self.blocks_from_cells();
+        self.cells_from_blocks();
         made_progress
     }
     pub fn write_save(&self, mut out: impl Write) {
@@ -434,47 +460,20 @@ impl GameState {
     }
     pub fn compatibility_search(&mut self, depth: usize) -> bool {
         let mut made_progress = false;
-        let mut joint_possibilities_cache: Vec<_> = self
-            .blocks
-            .iter()
-            .map(|block| {
-                let masks = self.get_block_possibilities(block);
-                let mut iter = block.joint_possibilities(&masks, self.size);
-                let mut out = Vec::new();
-                while let Some(joint_possibility) = iter.next() {
-                    out.push(joint_possibility.to_vec());
-                }
-                out
-            })
-            .collect();
         for block_id in 0..self.blocks.len() {
             let block = &self.blocks[block_id];
             let mut seen = vec![None; self.size * self.size];
-            let old_joint_possibilities = &joint_possibilities_cache[block_id];
+            let old_joint_possibilities = &block.possibilities;
             let new_joint_possibilities: Vec<_> = old_joint_possibilities
                 .iter()
-                .filter(|p| {
-                    self.compatibility_search_inner(
-                        depth,
-                        block_id,
-                        p,
-                        &mut seen,
-                        &joint_possibilities_cache,
-                    )
-                })
+                .filter(|p| self.compatibility_search_inner(depth, block_id, p, &mut seen))
                 .cloned()
                 .collect();
             if new_joint_possibilities != *old_joint_possibilities {
-                let mut new_masks = vec![0; block.cells.len()];
-                for p in &new_joint_possibilities {
-                    for (pos, x) in new_masks.iter_mut().zip(p.iter()) {
-                        *pos |= 1 << (x - 1);
-                    }
-                }
-                made_progress |= self.set_block_possibilities(block_id, &new_masks);
-                joint_possibilities_cache[block_id] = new_joint_possibilities;
+                made_progress = true;
             }
         }
+        self.cells_from_blocks();
         made_progress
     }
 
@@ -485,7 +484,6 @@ impl GameState {
         block_id: usize,
         block_joint_possibilities: &[i32],
         seen: &mut [Option<Vec<i32>>],
-        joint_possibilities: &[Vec<Vec<i32>>],
     ) -> bool {
         if depth == 0 {
             return true;
@@ -503,7 +501,8 @@ impl GameState {
                     &neighbor.cells,
                 );
             }
-            joint_possibilities[neighbor_id]
+            self.blocks[neighbor_id]
+                .possibilities
                 .iter()
                 .any(|neighbor_joint_possiblities| {
                     joint_possibilities_compatible(
@@ -517,7 +516,6 @@ impl GameState {
                         neighbor_id,
                         neighbor_joint_possiblities,
                         seen,
-                        joint_possibilities,
                     )
                 })
         });
@@ -529,9 +527,7 @@ impl GameState {
         for (block_id, block) in self.blocks.iter().enumerate() {
             let mut row_required = vec![(1 << self.size) - 1; self.size];
             let mut col_required = vec![(1 << self.size) - 1; self.size];
-            let masks = self.get_block_possibilities(block);
-            let mut iter = block.joint_possibilities(&masks, self.size);
-            while let Some(joint_possibilities) = iter.next() {
+            for joint_possibilities in &block.possibilities {
                 let mut row_vals = vec![0; self.size];
                 let mut col_vals = vec![0; self.size];
                 for (i, x) in block.cells.iter().zip(joint_possibilities.iter()) {
@@ -555,10 +551,11 @@ impl GameState {
                 made_progress |= original != cell.possibilities;
             }
         }
+        self.blocks_from_cells();
+        self.cells_from_blocks();
         made_progress
     }
     pub fn try_solvers(&mut self, mut stats: Option<&mut SolverStats>) -> bool {
-        // Actually helps
         if let Some(ref mut stats) = stats {
             stats.exclude_n_in_n.calls += 1;
         }
@@ -569,18 +566,10 @@ impl GameState {
             //eprint!("exclude_n_in_n ");
             return true;
         }
-        // Seems to be useless: no affect on runtime
         if let Some(ref mut stats) = stats {
             stats.filter_by_blocks_conditional.calls += 1;
         }
-        if self.filter_by_blocks_conditional() {
-            if let Some(ref mut stats) = stats {
-                stats.filter_by_blocks_conditional.successes += 1;
-            }
-            //eprint!("filter_by_blocks_conditional ");
-            return true;
-        }
-        // Slows things down, not sure why.
+        // Seems to be useless: no affect on runtime
         if let Some(ref mut stats) = stats {
             stats.must_be_in_block.calls += 1;
         }
@@ -591,7 +580,7 @@ impl GameState {
             //eprint!("must_be_in_block ");
             return true;
         }
-        for depth in 1..5 {
+        for depth in 1..SEARCH_DEPTH {
             if depth == 2 {
                 continue;
             }
@@ -649,7 +638,7 @@ pub struct SolverStats {
     exclude_n_in_n: SolverStat,
     filter_by_blocks_conditional: SolverStat,
     must_be_in_block: SolverStat,
-    compatibility_search: [SolverStat; 5],
+    compatibility_search: [SolverStat; SEARCH_DEPTH],
 }
 
 fn joint_possibilities_compatible(
@@ -679,11 +668,13 @@ mod tests {
             op: crate::Operator::Div,
             val: 2,
         };
-        let b = BlockInfo {
+        let mut b = BlockInfo {
             constraint: c,
             cells: vec![0, 1],
             interacting_blocks: Vec::new(),
+            possibilities: Vec::new(),
         };
+        b.fill_in_possibilities(6);
         let possibilities = vec![1 << (4 - 1), 1 << (2 - 1) | 1 << (3 - 1) | 1 << (6 - 1)];
         let result = b.conditional_possibilities(&possibilities, 6);
         assert_eq!(result, vec![1 << (4 - 1), 1 << (2 - 1)]);
