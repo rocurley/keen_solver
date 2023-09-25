@@ -470,6 +470,7 @@ impl GameState {
                 .cloned()
                 .collect();
             if new_joint_possibilities != *old_joint_possibilities {
+                self.blocks[block_id].possibilities = new_joint_possibilities;
                 made_progress = true;
             }
         }
@@ -563,11 +564,8 @@ impl GameState {
             if let Some(ref mut stats) = stats {
                 stats.exclude_n_in_n.successes += 1;
             }
-            //eprint!("exclude_n_in_n ");
+            // eprint!("exclude_n_in_n ");
             return true;
-        }
-        if let Some(ref mut stats) = stats {
-            stats.filter_by_blocks_conditional.calls += 1;
         }
         // Seems to be useless: no affect on runtime
         if let Some(ref mut stats) = stats {
@@ -577,7 +575,7 @@ impl GameState {
             if let Some(ref mut stats) = stats {
                 stats.must_be_in_block.successes += 1;
             }
-            //eprint!("must_be_in_block ");
+            // eprint!("must_be_in_block ");
             return true;
         }
         for depth in 1..SEARCH_DEPTH {
@@ -591,7 +589,7 @@ impl GameState {
                 if let Some(ref mut stats) = stats {
                     stats.compatibility_search[depth].successes += 1;
                 }
-                //eprint!("compatibility_search({}) ", depth);
+                // eprint!("compatibility_search({}) ", depth);
                 return true;
             }
         }
