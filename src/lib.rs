@@ -91,20 +91,6 @@ impl BlockInfo {
             values,
         }
     }
-    fn conditional_possibilities(
-        &self,
-        possibilities: &[Bitmask],
-        board_size: usize,
-    ) -> Vec<Bitmask> {
-        let mut new_possibilities = vec![0; self.cells.len()];
-        let mut iter = self.joint_possibilities(possibilities, board_size);
-        while let Some(values) = iter.next() {
-            for (pos, x) in new_possibilities.iter_mut().zip(values.iter()) {
-                *pos |= 1 << (x - 1);
-            }
-        }
-        new_possibilities
-    }
     fn fill_in_possibilities(&mut self, board_size: usize) {
         let dummy_cell_possibilities = vec![(1 << board_size) - 1; self.cells.len()];
         let mut iter = self.joint_possibilities(&dummy_cell_possibilities, board_size);
@@ -445,13 +431,6 @@ impl GameState {
             .iter()
             .all(|cell| Bitmask::is_power_of_two(cell.possibilities))
     }
-    fn get_block_possibilities(&self, block: &BlockInfo) -> Vec<Bitmask> {
-        block
-            .cells
-            .iter()
-            .map(|&i| self.cells[i].possibilities)
-            .collect()
-    }
     pub fn set_block_possibilities(&mut self, i: usize, new_masks: &[Bitmask]) -> bool {
         let mut changed = false;
         for (&i, &new_mask) in self.blocks[i].cells.iter().zip(new_masks.iter()) {
@@ -640,7 +619,6 @@ pub struct SolverStat {
 #[derive(Clone, Debug, Default)]
 pub struct SolverStats {
     exclude_n_in_n: SolverStat,
-    filter_by_blocks_conditional: SolverStat,
     must_be_in_block: SolverStat,
     compatibility_search: [SolverStat; SEARCH_DEPTH],
 }
@@ -664,25 +642,7 @@ fn joint_possibilities_compatible(
 
 #[cfg(test)]
 mod tests {
-    use crate::{BlockInfo, Constraint, GameState};
-
-    #[test]
-    fn test_conditional_possibilities() {
-        let c = Constraint {
-            op: crate::Operator::Div,
-            val: 2,
-        };
-        let mut b = BlockInfo {
-            constraint: c,
-            cells: vec![0, 1],
-            interacting_blocks: Vec::new(),
-            possibilities: Vec::new(),
-        };
-        b.fill_in_possibilities(6);
-        let possibilities = vec![1 << (4 - 1), 1 << (2 - 1) | 1 << (3 - 1) | 1 << (6 - 1)];
-        let result = b.conditional_possibilities(&possibilities, 6);
-        assert_eq!(result, vec![1 << (4 - 1), 1 << (2 - 1)]);
-    }
+    use crate::GameState;
     #[test]
     fn test_load() {
         let save = std::fs::read("test_data/search_depth_2_test_case").unwrap();
