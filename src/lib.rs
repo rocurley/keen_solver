@@ -1,4 +1,8 @@
-use std::{collections::HashMap, io::Write};
+use std::{
+    collections::HashMap,
+    io::Write,
+    ops::{Index, IndexMut},
+};
 
 use pest::Parser;
 use pest_derive::Parser;
@@ -44,7 +48,7 @@ struct BlockInfo {
     possibilities: Vec<Vec<i32>>,
 }
 
-const SEARCH_DEPTH: usize = 5;
+const SEARCH_DEPTH: usize = 2;
 
 impl BlockInfo {
     fn is_linear(&self, board_size: usize) -> bool {
@@ -442,23 +446,28 @@ impl GameState {
     pub fn compatibility_search(&mut self, depth: usize) -> bool {
         let mut made_progress = false;
         for block_id in 0..self.blocks.len() {
-            let block = &self.blocks[block_id];
-            let mut seen = vec![None; self.size * self.size];
-            let old_joint_possibilities = &block.possibilities;
-            let new_joint_possibilities: Vec<_> = old_joint_possibilities
-                .iter()
-                .filter(|p| self.compatibility_search_inner(depth, block_id, p, &mut seen))
-                .cloned()
-                .collect();
-            if new_joint_possibilities != *old_joint_possibilities {
-                self.blocks[block_id].possibilities = new_joint_possibilities;
-                made_progress = true;
-            }
+            made_progress |= self.compatibility_search_single(block_id, depth);
         }
         if made_progress {
             self.cells_from_blocks();
         }
         made_progress
+    }
+    fn compatibility_search_single(&mut self, block_id: usize, depth: usize) -> bool {
+        let block = &self.blocks[block_id];
+        let mut seen = vec![None; self.size * self.size];
+        let old_joint_possibilities = &block.possibilities;
+        let new_joint_possibilities: Vec<_> = old_joint_possibilities
+            .iter()
+            .filter(|p| self.compatibility_search_inner(depth, block_id, p, &mut seen))
+            .cloned()
+            .collect();
+        if new_joint_possibilities != *old_joint_possibilities {
+            self.blocks[block_id].possibilities = new_joint_possibilities;
+            true
+        } else {
+            false
+        }
     }
 
     // checks if there's any solution consistent with seen
@@ -542,43 +551,34 @@ impl GameState {
         made_progress
     }
     pub fn try_solvers(&mut self, mut stats: Option<&mut SolverStats>) -> bool {
-        if let Some(ref mut stats) = stats {
-            stats.exclude_n_in_n.calls += 1;
-        }
-        if self.exclude_n_in_n() {
-            if let Some(ref mut stats) = stats {
-                stats.exclude_n_in_n.successes += 1;
-            }
-            // eprint!("exclude_n_in_n ");
+        if self.run_solver(Solver::ExcludeNInN, &mut stats) {
             return true;
         }
-        // Seems to be useless: no affect on runtime
-        if let Some(ref mut stats) = stats {
-            stats.must_be_in_block.calls += 1;
-        }
-        if self.must_be_in_block() {
-            if let Some(ref mut stats) = stats {
-                stats.must_be_in_block.successes += 1;
-            }
-            // eprint!("must_be_in_block ");
+        if self.run_solver(Solver::MustBeInBlock, &mut stats) {
             return true;
         }
-        for depth in 1..SEARCH_DEPTH {
-            if depth == 2 {
-                continue;
-            }
-            if let Some(ref mut stats) = stats {
-                stats.compatibility_search[depth].calls += 1;
-            }
-            if self.compatibility_search(depth) {
-                if let Some(ref mut stats) = stats {
-                    stats.compatibility_search[depth].successes += 1;
-                }
-                // eprint!("compatibility_search({}) ", depth);
-                return true;
-            }
+        if self.run_solver(Solver::CompatibilitySearch(1), &mut stats) {
+            return true;
+        }
+        if self.run_solver(Solver::CompatibilitySearch(3), &mut stats) {
+            return true;
+        }
+        if self.run_solver(Solver::CompatibilitySearch(4), &mut stats) {
+            return true;
         }
         return false;
+    }
+    fn most_interesting_block(&self) -> (usize, &BlockInfo) {
+        self.blocks
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, block)| {
+                (
+                    block.cells.len() * 4 * 3 * 5 / block.possibilities.len(),
+                    block.cells.len(),
+                )
+            })
+            .unwrap()
     }
     pub fn from_save(r: impl std::io::BufRead) -> Self {
         let mut kvs = HashMap::new();
@@ -608,6 +608,27 @@ impl GameState {
         }
         out
     }
+    fn run_solver(&mut self, solver: Solver, stats: &mut Option<&mut SolverStats>) -> bool {
+        let res = match solver {
+            Solver::ExcludeNInN => self.exclude_n_in_n(),
+            Solver::MustBeInBlock => self.must_be_in_block(),
+            Solver::CompatibilitySearch(n) => self.compatibility_search(n),
+        };
+        if let Some(ref mut stats) = stats {
+            stats[solver].calls += 1;
+            if res {
+                stats[solver].successes += 1;
+            }
+        }
+        res
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+enum Solver {
+    ExcludeNInN,
+    MustBeInBlock,
+    CompatibilitySearch(usize),
 }
 
 #[derive(Clone, Debug, Default)]
@@ -621,6 +642,26 @@ pub struct SolverStats {
     exclude_n_in_n: SolverStat,
     must_be_in_block: SolverStat,
     compatibility_search: [SolverStat; SEARCH_DEPTH],
+}
+
+impl Index<Solver> for SolverStats {
+    type Output = SolverStat;
+    fn index(&self, index: Solver) -> &Self::Output {
+        match index {
+            Solver::ExcludeNInN => &self.exclude_n_in_n,
+            Solver::MustBeInBlock => &self.must_be_in_block,
+            Solver::CompatibilitySearch(n) => &self.compatibility_search[n],
+        }
+    }
+}
+impl IndexMut<Solver> for SolverStats {
+    fn index_mut(&mut self, index: Solver) -> &mut Self::Output {
+        match index {
+            Solver::ExcludeNInN => &mut self.exclude_n_in_n,
+            Solver::MustBeInBlock => &mut self.must_be_in_block,
+            Solver::CompatibilitySearch(n) => &mut self.compatibility_search[n],
+        }
+    }
 }
 
 fn joint_possibilities_compatible(
