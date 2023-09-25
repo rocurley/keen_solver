@@ -538,18 +538,45 @@ impl GameState {
         }
         made_progress
     }
-    pub fn try_solvers(&mut self) -> bool {
+    pub fn try_solvers(&mut self, mut stats: Option<&mut SolverStats>) -> bool {
+        // Actually helps
+        if let Some(ref mut stats) = stats {
+            stats.exclude_n_in_n.calls += 1;
+        }
         if self.exclude_n_in_n() {
+            if let Some(ref mut stats) = stats {
+                stats.exclude_n_in_n.successes += 1;
+            }
             return true;
+        }
+        // Seems to be useless: no affect on runtime
+        if let Some(ref mut stats) = stats {
+            stats.filter_by_blocks_conditional.calls += 1;
         }
         if self.filter_by_blocks_conditional() {
+            if let Some(ref mut stats) = stats {
+                stats.filter_by_blocks_conditional.successes += 1;
+            }
             return true;
+        }
+        // Slows things down, not sure why.
+        if let Some(ref mut stats) = stats {
+            stats.must_be_in_block.calls += 1;
         }
         if self.must_be_in_block() {
+            if let Some(ref mut stats) = stats {
+                stats.must_be_in_block.successes += 1;
+            }
             return true;
         }
-        for depth in 0..3 {
+        for depth in 1..4 {
+            if let Some(ref mut stats) = stats {
+                stats.compatibility_search[depth].calls += 1;
+            }
             if self.compatibility_search(depth) {
+                if let Some(ref mut stats) = stats {
+                    stats.compatibility_search[depth].successes += 1;
+                }
                 return true;
             }
         }
@@ -583,6 +610,20 @@ impl GameState {
         }
         out
     }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct SolverStat {
+    calls: usize,
+    successes: usize,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct SolverStats {
+    exclude_n_in_n: SolverStat,
+    filter_by_blocks_conditional: SolverStat,
+    must_be_in_block: SolverStat,
+    compatibility_search: [SolverStat; 4],
 }
 
 fn joint_possibilities_compatible(
