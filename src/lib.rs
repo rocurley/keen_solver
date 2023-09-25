@@ -417,8 +417,8 @@ impl GameState {
             .iter()
             .all(|cell| Bitmask::is_power_of_two(cell.possibilities))
     }
-    pub fn get_block_possibilities(&self, i: usize) -> Vec<Bitmask> {
-        self.blocks[i]
+    fn get_block_possibilities(&self, block: &BlockInfo) -> Vec<Bitmask> {
+        block
             .cells
             .iter()
             .map(|&i| self.cells[i].possibilities)
@@ -434,22 +434,46 @@ impl GameState {
     }
     pub fn compatibility_search(&mut self, depth: usize) -> bool {
         let mut made_progress = false;
+        let mut joint_possibilities_cache: Vec<_> = self
+            .blocks
+            .iter()
+            .map(|block| {
+                let masks = self.get_block_possibilities(block);
+                let mut iter = block.joint_possibilities(&masks, self.size);
+                let mut out = Vec::new();
+                while let Some(joint_possibility) = iter.next() {
+                    out.push(joint_possibility.to_vec());
+                }
+                out
+            })
+            .collect();
         for block_id in 0..self.blocks.len() {
             let block = &self.blocks[block_id];
-            let masks = self.get_block_possibilities(block_id);
-            let mut new_masks = vec![0; block.cells.len()];
-            let mut iter = block.joint_possibilities(&masks, self.size);
             let mut seen = vec![None; self.size * self.size];
-            while let Some(p) = iter.next() {
-                let neighbors_compatible =
-                    self.compatibility_search_inner(depth, block_id, p, &mut seen);
-                if neighbors_compatible {
+            let old_joint_possibilities = &joint_possibilities_cache[block_id];
+            let new_joint_possibilities: Vec<_> = old_joint_possibilities
+                .iter()
+                .filter(|p| {
+                    self.compatibility_search_inner(
+                        depth,
+                        block_id,
+                        p,
+                        &mut seen,
+                        &joint_possibilities_cache,
+                    )
+                })
+                .cloned()
+                .collect();
+            if new_joint_possibilities != *old_joint_possibilities {
+                let mut new_masks = vec![0; block.cells.len()];
+                for p in &new_joint_possibilities {
                     for (pos, x) in new_masks.iter_mut().zip(p.iter()) {
                         *pos |= 1 << (x - 1);
                     }
                 }
+                made_progress |= self.set_block_possibilities(block_id, &new_masks);
+                joint_possibilities_cache[block_id] = new_joint_possibilities;
             }
-            made_progress |= self.set_block_possibilities(block_id, &new_masks);
         }
         made_progress
     }
@@ -461,6 +485,7 @@ impl GameState {
         block_id: usize,
         block_joint_possibilities: &[i32],
         seen: &mut [Option<Vec<i32>>],
+        joint_possibilities: &[Vec<Vec<i32>>],
     ) -> bool {
         if depth == 0 {
             return true;
@@ -478,29 +503,23 @@ impl GameState {
                     &neighbor.cells,
                 );
             }
-            let neighbor_masks = self.get_block_possibilities(neighbor_id);
-            let mut neighbor_iter = neighbor.joint_possibilities(&neighbor_masks, self.size);
-            // Not an actual iterator, can't use .any()
-            while let Some(neighbor_joint_possiblities) = neighbor_iter.next() {
-                if !joint_possibilities_compatible(
-                    self.size,
-                    &block_joint_possibilities,
-                    &block.cells,
-                    neighbor_joint_possiblities,
-                    &neighbor.cells,
-                ) {
-                    continue;
-                }
-                if self.compatibility_search_inner(
-                    depth - 1,
-                    neighbor_id,
-                    neighbor_joint_possiblities,
-                    seen,
-                ) {
-                    return true;
-                }
-            }
-            false
+            joint_possibilities[neighbor_id]
+                .iter()
+                .any(|neighbor_joint_possiblities| {
+                    joint_possibilities_compatible(
+                        self.size,
+                        &block_joint_possibilities,
+                        &block.cells,
+                        neighbor_joint_possiblities,
+                        &neighbor.cells,
+                    ) && self.compatibility_search_inner(
+                        depth - 1,
+                        neighbor_id,
+                        neighbor_joint_possiblities,
+                        seen,
+                        joint_possibilities,
+                    )
+                })
         });
         seen[block_id] = None;
         res
@@ -510,7 +529,7 @@ impl GameState {
         for (block_id, block) in self.blocks.iter().enumerate() {
             let mut row_required = vec![(1 << self.size) - 1; self.size];
             let mut col_required = vec![(1 << self.size) - 1; self.size];
-            let masks = self.get_block_possibilities(block_id);
+            let masks = self.get_block_possibilities(block);
             let mut iter = block.joint_possibilities(&masks, self.size);
             while let Some(joint_possibilities) = iter.next() {
                 let mut row_vals = vec![0; self.size];
