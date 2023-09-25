@@ -566,6 +566,7 @@ impl GameState {
             if let Some(ref mut stats) = stats {
                 stats.exclude_n_in_n.successes += 1;
             }
+            //eprint!("exclude_n_in_n ");
             return true;
         }
         // Seems to be useless: no affect on runtime
@@ -576,6 +577,7 @@ impl GameState {
             if let Some(ref mut stats) = stats {
                 stats.filter_by_blocks_conditional.successes += 1;
             }
+            //eprint!("filter_by_blocks_conditional ");
             return true;
         }
         // Slows things down, not sure why.
@@ -586,9 +588,13 @@ impl GameState {
             if let Some(ref mut stats) = stats {
                 stats.must_be_in_block.successes += 1;
             }
+            //eprint!("must_be_in_block ");
             return true;
         }
-        for depth in 1..4 {
+        for depth in 1..5 {
+            if depth == 2 {
+                continue;
+            }
             if let Some(ref mut stats) = stats {
                 stats.compatibility_search[depth].calls += 1;
             }
@@ -596,6 +602,7 @@ impl GameState {
                 if let Some(ref mut stats) = stats {
                     stats.compatibility_search[depth].successes += 1;
                 }
+                //eprint!("compatibility_search({}) ", depth);
                 return true;
             }
         }
@@ -642,7 +649,7 @@ pub struct SolverStats {
     exclude_n_in_n: SolverStat,
     filter_by_blocks_conditional: SolverStat,
     must_be_in_block: SolverStat,
-    compatibility_search: [SolverStat; 4],
+    compatibility_search: [SolverStat; 5],
 }
 
 fn joint_possibilities_compatible(

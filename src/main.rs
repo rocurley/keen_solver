@@ -11,6 +11,7 @@ fn main() {
         state.filter_by_blocks_simple();
         while !state.solved() && state.try_solvers(Some(&mut stats)) {}
         if state.solved() {
+            //eprintln!("");
             continue;
         }
         eprintln!("Got to: {}", game_seed);
