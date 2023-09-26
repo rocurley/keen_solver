@@ -475,13 +475,13 @@ impl GameState {
         assert_eq!(depth, 1);
         let mut made_progress = false;
         for block_id in 0..self.blocks.len() {
-            let new_possibilities: Vec<_> = self.blocks[block_id]
-                .possibilities
-                .iter()
-                .enumerate()
-                .filter(|&(i, _)| self.radial_search_single(block_id, i))
-                .map(|(_, p)| p.clone())
-                .collect();
+            let mut new_possibilities = Vec::new();
+            for (i, p) in self.blocks[block_id].possibilities.iter().enumerate() {
+                if !self.radial_search_single(block_id, i) {
+                    continue;
+                }
+                new_possibilities.push(p.clone());
+            }
             if new_possibilities != self.blocks[block_id].possibilities {
                 made_progress = true;
                 self.blocks[block_id].possibilities = new_possibilities;
