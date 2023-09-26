@@ -48,7 +48,7 @@ struct BlockInfo {
     possibilities: Vec<Vec<i32>>,
 }
 
-const SEARCH_DEPTH: usize = 2;
+const SEARCH_DEPTH: usize = 5;
 
 impl BlockInfo {
     fn is_linear(&self, board_size: usize) -> bool {
@@ -471,6 +471,79 @@ impl GameState {
         }
     }
 
+    pub fn radial_search(&mut self, depth: usize) -> bool {
+        assert_eq!(depth, 1);
+        let mut made_progress = false;
+        for block_id in 0..self.blocks.len() {
+            let new_possibilities: Vec<_> = self.blocks[block_id]
+                .possibilities
+                .iter()
+                .enumerate()
+                .filter(|&(i, _)| self.radial_search_single(block_id, i))
+                .map(|(_, p)| p.clone())
+                .collect();
+            if new_possibilities != self.blocks[block_id].possibilities {
+                made_progress = true;
+                self.blocks[block_id].possibilities = new_possibilities;
+            }
+        }
+        if made_progress {
+            self.cells_from_blocks();
+        }
+        made_progress
+    }
+
+    // depth 1 for now
+    fn radial_search_single(&self, block_id: usize, possibility_ix: usize) -> bool {
+        let block = &self.blocks[block_id];
+        struct SearchBlock<'a> {
+            block: &'a BlockInfo,
+            possibility_ix: usize,
+            // TODO: cache which cells this block's cells can see
+        }
+        impl<'a> SearchBlock<'a> {
+            fn can_increment(&self) -> bool {
+                self.possibility_ix + 1 < self.block.possibilities.len()
+            }
+        }
+        let mut search_space = vec![SearchBlock {
+            block,
+            possibility_ix,
+        }];
+        search_space.extend(block.interacting_blocks.iter().map(|&i| SearchBlock {
+            block: &self.blocks[i],
+            possibility_ix: 0,
+        }));
+        loop {
+            let validation_failure = (1..search_space.len()).find(|&i| {
+                let r_block = &search_space[i];
+                search_space[..i].iter().any(|l_block| {
+                    !joint_possibilities_compatible(
+                        self.size,
+                        &l_block.block.possibilities[l_block.possibility_ix],
+                        &l_block.block.cells,
+                        &r_block.block.possibilities[r_block.possibility_ix],
+                        &r_block.block.cells,
+                    )
+                })
+            });
+            let mut increment_point = match validation_failure {
+                None => return true,
+                Some(x) => x,
+            };
+            while increment_point > 0 && !search_space[increment_point].can_increment() {
+                increment_point -= 1;
+            }
+            if increment_point == 0 {
+                return false;
+            }
+            search_space[increment_point].possibility_ix += 1;
+            for block in &mut search_space[increment_point + 1..] {
+                block.possibility_ix = 0;
+            }
+        }
+    }
+
     // checks if there's any solution consistent with seen
     fn compatibility_search_inner(
         &self,
@@ -561,6 +634,9 @@ impl GameState {
         if self.run_solver(Solver::CompatibilitySearch(1), &mut stats) {
             return true;
         }
+        if self.run_solver(Solver::RadialSearch(1), &mut stats) {
+            return true;
+        }
         if self.run_solver(Solver::CompatibilitySearch(3), &mut stats) {
             return true;
         }
@@ -615,6 +691,7 @@ impl GameState {
             Solver::ExcludeNInN => self.exclude_n_in_n(),
             Solver::MustBeInBlock => self.must_be_in_block(),
             Solver::CompatibilitySearch(n) => self.compatibility_search(n),
+            Solver::RadialSearch(n) => self.radial_search(n),
         };
         if let Some(ref mut stats) = stats {
             stats[solver].calls += 1;
@@ -631,6 +708,7 @@ enum Solver {
     ExcludeNInN,
     MustBeInBlock,
     CompatibilitySearch(usize),
+    RadialSearch(usize),
 }
 
 #[derive(Clone, Debug, Default)]
@@ -644,6 +722,7 @@ pub struct SolverStats {
     exclude_n_in_n: SolverStat,
     must_be_in_block: SolverStat,
     compatibility_search: [SolverStat; SEARCH_DEPTH],
+    radial_search: [SolverStat; SEARCH_DEPTH],
 }
 
 impl Index<Solver> for SolverStats {
@@ -653,6 +732,7 @@ impl Index<Solver> for SolverStats {
             Solver::ExcludeNInN => &self.exclude_n_in_n,
             Solver::MustBeInBlock => &self.must_be_in_block,
             Solver::CompatibilitySearch(n) => &self.compatibility_search[n],
+            Solver::RadialSearch(n) => &self.radial_search[n],
         }
     }
 }
@@ -662,6 +742,7 @@ impl IndexMut<Solver> for SolverStats {
             Solver::ExcludeNInN => &mut self.exclude_n_in_n,
             Solver::MustBeInBlock => &mut self.must_be_in_block,
             Solver::CompatibilitySearch(n) => &mut self.compatibility_search[n],
+            Solver::RadialSearch(n) => &mut self.radial_search[n],
         }
     }
 }
