@@ -457,6 +457,7 @@ impl GameState {
         let block = &self.blocks[block_id];
         let mut seen = vec![None; self.size * self.size];
         let old_joint_possibilities = &block.possibilities;
+        // TODO: abort search when down to one possibility
         let new_joint_possibilities: Vec<_> = old_joint_possibilities
             .iter()
             .filter(|p| self.compatibility_search_inner(depth, block_id, p, &mut seen))
@@ -572,6 +573,7 @@ impl GameState {
         self.blocks
             .iter()
             .enumerate()
+            .filter(|(_, block)| block.possibilities.len() > 1)
             .min_by_key(|(_, block)| {
                 (
                     block.cells.len() * 4 * 3 * 5 / block.possibilities.len(),
