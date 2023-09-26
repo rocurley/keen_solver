@@ -499,32 +499,62 @@ impl GameState {
         struct SearchBlock<'a> {
             block: &'a BlockInfo,
             possibility_ix: usize,
-            // TODO: cache which cells this block's cells can see
+            interactions: Vec<CellInteraction>,
+        }
+        struct CellInteraction {
+            local_cell_ix: usize,
+            other_block_ix: usize,
+            other_cell_ix: usize,
         }
         impl<'a> SearchBlock<'a> {
             fn can_increment(&self) -> bool {
                 self.possibility_ix + 1 < self.block.possibilities.len()
             }
+            fn current_possibility(&self) -> &[i32] {
+                &self.block.possibilities[self.possibility_ix]
+            }
         }
         let mut search_space = vec![SearchBlock {
             block,
             possibility_ix,
+            interactions: Vec::new(),
         }];
-        search_space.extend(block.interacting_blocks.iter().map(|&i| SearchBlock {
-            block: &self.blocks[i],
-            possibility_ix: 0,
-        }));
+        for &i in &block.interacting_blocks {
+            let block = &self.blocks[i];
+            //for (other_block_ix, other_block) in
+            let mut interactions = Vec::new();
+            for (other_block_ix, other_block) in search_space.iter().enumerate() {
+                let other_cells = &other_block.block.cells;
+                for (other_cell_ix, other_cell_loc) in other_cells.iter().enumerate() {
+                    for (local_cell_ix, local_cell_loc) in block.cells.iter().enumerate() {
+                        if (other_cell_loc % self.size != local_cell_loc % self.size)
+                            && (other_cell_loc / self.size != local_cell_loc / self.size)
+                        {
+                            continue;
+                        }
+                        interactions.push(CellInteraction {
+                            local_cell_ix,
+                            other_block_ix,
+                            other_cell_ix,
+                        });
+                    }
+                }
+            }
+            let sb = SearchBlock {
+                block,
+                possibility_ix: 0,
+                interactions,
+            };
+            search_space.push(sb);
+        }
         loop {
             let validation_failure = (1..search_space.len()).find(|&i| {
                 let r_block = &search_space[i];
-                search_space[..i].iter().any(|l_block| {
-                    !joint_possibilities_compatible(
-                        self.size,
-                        &l_block.block.possibilities[l_block.possibility_ix],
-                        &l_block.block.cells,
-                        &r_block.block.possibilities[r_block.possibility_ix],
-                        &r_block.block.cells,
-                    )
+                r_block.interactions.iter().any(|interaction| {
+                    let local_val = r_block.current_possibility()[interaction.local_cell_ix];
+                    let other_val = search_space[interaction.other_block_ix]
+                        .current_possibility()[interaction.other_cell_ix];
+                    local_val == other_val
                 })
             });
             let mut increment_point = match validation_failure {
