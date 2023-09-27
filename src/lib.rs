@@ -483,6 +483,11 @@ impl GameState {
         made_progress
     }
 
+    fn radial_search_promising(&mut self) -> bool {
+        let (block_id, _) = self.most_interesting_block();
+        self.radial_search_single(block_id)
+    }
+
     // depth 1 for now
     fn radial_search_single(&mut self, block_id: usize) -> bool {
         let mut new_possibilities = Vec::new();
@@ -676,6 +681,9 @@ impl GameState {
         if self.run_solver(Solver::CompatibilitySearch(1), &mut stats) {
             return true;
         }
+        if self.run_solver(Solver::RadialSearchPromising, &mut stats) {
+            return true;
+        }
         if self.run_solver(Solver::RadialSearch(1), &mut stats) {
             return true;
         }
@@ -733,6 +741,7 @@ impl GameState {
             Solver::ExcludeNInN => self.exclude_n_in_n(),
             Solver::MustBeInBlock => self.must_be_in_block(),
             Solver::CompatibilitySearch(n) => self.compatibility_search(n),
+            Solver::RadialSearchPromising => self.radial_search_promising(),
             Solver::RadialSearch(n) => self.radial_search(n),
         };
         if let Some(ref mut stats) = stats {
@@ -750,6 +759,7 @@ enum Solver {
     ExcludeNInN,
     MustBeInBlock,
     CompatibilitySearch(usize),
+    RadialSearchPromising,
     RadialSearch(usize),
 }
 
@@ -764,6 +774,7 @@ pub struct SolverStats {
     exclude_n_in_n: SolverStat,
     must_be_in_block: SolverStat,
     compatibility_search: [SolverStat; SEARCH_DEPTH],
+    radial_search_promising: SolverStat,
     radial_search: [SolverStat; SEARCH_DEPTH],
 }
 
@@ -774,6 +785,7 @@ impl Index<Solver> for SolverStats {
             Solver::ExcludeNInN => &self.exclude_n_in_n,
             Solver::MustBeInBlock => &self.must_be_in_block,
             Solver::CompatibilitySearch(n) => &self.compatibility_search[n],
+            Solver::RadialSearchPromising => &self.radial_search_promising,
             Solver::RadialSearch(n) => &self.radial_search[n],
         }
     }
@@ -784,6 +796,7 @@ impl IndexMut<Solver> for SolverStats {
             Solver::ExcludeNInN => &mut self.exclude_n_in_n,
             Solver::MustBeInBlock => &mut self.must_be_in_block,
             Solver::CompatibilitySearch(n) => &mut self.compatibility_search[n],
+            Solver::RadialSearchPromising => &mut self.radial_search_promising,
             Solver::RadialSearch(n) => &mut self.radial_search[n],
         }
     }
