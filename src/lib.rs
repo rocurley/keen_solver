@@ -115,7 +115,7 @@ struct JointPossibilities<'a> {
 }
 
 impl<'a> JointPossibilities<'a> {
-    pub fn next(&mut self) -> Option<&[i32]> {
+    fn next(&mut self) -> Option<&[i32]> {
         'outer: while next_values_list(self.board_size, &mut self.values) {
             for (pos, x) in self.possibilities.iter().zip(self.values.iter()) {
                 if pos & (1 << (x - 1)) == 0 {
@@ -318,7 +318,7 @@ impl GameState {
             }
         }
     }
-    pub fn blocks_from_cells(&mut self) {
+    fn blocks_from_cells(&mut self) {
         for block in &mut self.blocks {
             block.possibilities.retain(|p| {
                 p.iter().zip(block.cells.iter()).all(|(x, &cell_id)| {
@@ -345,7 +345,7 @@ impl GameState {
             cell.possibilities &= block_possibilities[cell.block_id];
         }
     }
-    pub fn exclude_n_in_n(&mut self) -> bool {
+    fn exclude_n_in_n(&mut self) -> bool {
         let mut made_progress = false;
         for transposed in [true, false] {
             for y in 0..self.size {
@@ -471,7 +471,7 @@ impl GameState {
         }
     }
 
-    pub fn radial_search(&mut self, depth: usize) -> bool {
+    fn radial_search(&mut self, depth: usize) -> bool {
         assert_eq!(depth, 1);
         let mut made_progress = false;
         for block_id in 0..self.blocks.len() {
@@ -631,7 +631,7 @@ impl GameState {
         seen[block_id] = None;
         res
     }
-    pub fn must_be_in_block(&mut self) -> bool {
+    fn must_be_in_block(&mut self) -> bool {
         let mut made_progress = false;
         for (block_id, block) in self.blocks.iter().enumerate() {
             let mut row_required = vec![(1 << self.size) - 1; self.size];
