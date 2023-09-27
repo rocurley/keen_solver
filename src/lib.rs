@@ -475,17 +475,7 @@ impl GameState {
         assert_eq!(depth, 1);
         let mut made_progress = false;
         for block_id in 0..self.blocks.len() {
-            let mut new_possibilities = Vec::new();
-            for (i, p) in self.blocks[block_id].possibilities.iter().enumerate() {
-                if !self.radial_search_single(block_id, i) {
-                    continue;
-                }
-                new_possibilities.push(p.clone());
-            }
-            if new_possibilities != self.blocks[block_id].possibilities {
-                made_progress = true;
-                self.blocks[block_id].possibilities = new_possibilities;
-            }
+            made_progress |= self.radial_search_single(block_id);
         }
         if made_progress {
             self.cells_from_blocks();
@@ -494,7 +484,29 @@ impl GameState {
     }
 
     // depth 1 for now
-    fn radial_search_single(&self, block_id: usize, possibility_ix: usize) -> bool {
+    fn radial_search_single(&mut self, block_id: usize) -> bool {
+        let mut new_possibilities = Vec::new();
+        let possibilities = &self.blocks[block_id].possibilities;
+        for (i, p) in possibilities.iter().enumerate() {
+            if i == possibilities.len() - 1 && new_possibilities.is_empty() {
+                new_possibilities.push(p.clone());
+                continue;
+            }
+            if !self.radial_search_single_possibility(block_id, i) {
+                continue;
+            }
+            new_possibilities.push(p.clone());
+        }
+        if new_possibilities != self.blocks[block_id].possibilities {
+            self.blocks[block_id].possibilities = new_possibilities;
+            true
+        } else {
+            false
+        }
+    }
+
+    // depth 1 for now
+    fn radial_search_single_possibility(&self, block_id: usize, possibility_ix: usize) -> bool {
         let block = &self.blocks[block_id];
         struct SearchBlock<'a> {
             block: &'a BlockInfo,
