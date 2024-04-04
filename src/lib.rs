@@ -737,6 +737,7 @@ impl GameState {
         out
     }
     fn run_solver(&mut self, solver: Solver, stats: &mut Option<&mut SolverStats>) -> bool {
+        let initial_entropy = self.entropy();
         let res = match solver {
             Solver::ExcludeNInN => self.exclude_n_in_n(),
             Solver::MustBeInBlock => self.must_be_in_block(),
@@ -748,9 +749,16 @@ impl GameState {
             stats[solver].calls += 1;
             if res {
                 stats[solver].successes += 1;
+                stats[solver].entropy_removed += initial_entropy - self.entropy();
             }
         }
         res
+    }
+    fn entropy(&self) -> f32 {
+        self.blocks
+            .iter()
+            .map(|b| f32::log2(b.possibilities.len() as f32))
+            .sum()
     }
 }
 
@@ -767,6 +775,7 @@ enum Solver {
 pub struct SolverStat {
     calls: usize,
     successes: usize,
+    entropy_removed: f32,
 }
 
 #[derive(Clone, Debug, Default)]
