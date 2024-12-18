@@ -531,9 +531,10 @@ impl GameState {
             possibility_ix,
             interactions: Vec::new(),
         }];
+        // Setup: store all blocks that can interact with our target block in search_space. For
+        // each block, store what earlier blocks they interact with.
         for &i in &block.interacting_blocks {
             let block = &self.blocks[i];
-            //for (other_block_ix, other_block) in
             let mut interactions = Vec::new();
             for (other_block_ix, other_block) in search_space.iter().enumerate() {
                 let other_cells = &other_block.block.cells;
@@ -573,6 +574,8 @@ impl GameState {
                 None => return true,
                 Some(x) => x,
             };
+            // There's a conflict between search_space[increment_point] and some block in
+            // search_space[..increment_point].
             while increment_point > 0 && !search_space[increment_point].can_increment() {
                 increment_point -= 1;
             }
