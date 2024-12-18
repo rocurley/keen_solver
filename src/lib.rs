@@ -442,24 +442,24 @@ impl GameState {
         }
         changed
     }
-    pub fn compatibility_search(&mut self, depth: u8) -> bool {
+    pub fn compatibility_search(&mut self) -> bool {
         let mut made_progress = false;
         for block_id in 0..self.blocks.len() {
-            made_progress |= self.compatibility_search_single(block_id, depth);
+            made_progress |= self.compatibility_search_single(block_id);
         }
         if made_progress {
             self.cells_from_blocks();
         }
         made_progress
     }
-    fn compatibility_search_single(&mut self, block_id: usize, depth: u8) -> bool {
+    fn compatibility_search_single(&mut self, block_id: usize) -> bool {
         let block = &self.blocks[block_id];
         let mut seen = vec![None; self.size * self.size];
         let old_joint_possibilities = &block.possibilities;
         // TODO: abort search when down to one possibility
         let new_joint_possibilities: Vec<_> = old_joint_possibilities
             .iter()
-            .filter(|p| self.compatibility_search_inner(depth, block_id, p, &mut seen))
+            .filter(|p| self.compatibility_search_inner(block_id, p, &mut seen))
             .cloned()
             .collect();
         if new_joint_possibilities != *old_joint_possibilities {
@@ -593,14 +593,10 @@ impl GameState {
     // checks if there's any solution consistent with seen
     fn compatibility_search_inner(
         &self,
-        depth: u8,
         block_id: usize,
         block_joint_possibilities: &[i32],
         seen: &mut [Option<Vec<i32>>],
     ) -> bool {
-        if depth == 0 {
-            return true;
-        }
         let block = &self.blocks[block_id];
         seen[block_id] = Some(block_joint_possibilities.to_vec());
         let res = block.interacting_blocks.iter().all(|&neighbor_id| {
@@ -624,11 +620,6 @@ impl GameState {
                         &block.cells,
                         neighbor_joint_possiblities,
                         &neighbor.cells,
-                    ) && self.compatibility_search_inner(
-                        depth - 1,
-                        neighbor_id,
-                        neighbor_joint_possiblities,
-                        seen,
                     )
                 })
         });
@@ -677,19 +668,13 @@ impl GameState {
         if self.run_solver(Solver::MustBeInBlock, &mut stats) {
             return true;
         }
-        if self.run_solver(Solver::CompatibilitySearch(1), &mut stats) {
+        if self.run_solver(Solver::CompatibilitySearch, &mut stats) {
             return true;
         }
         if self.run_solver(Solver::RadialSearchPromising, &mut stats) {
             return true;
         }
         if self.run_solver(Solver::RadialSearch(1), &mut stats) {
-            return true;
-        }
-        if self.run_solver(Solver::CompatibilitySearch(3), &mut stats) {
-            return true;
-        }
-        if self.run_solver(Solver::CompatibilitySearch(4), &mut stats) {
             return true;
         }
         return false;
@@ -740,7 +725,7 @@ impl GameState {
         let res = match solver {
             Solver::ExcludeNInN => self.exclude_n_in_n(),
             Solver::MustBeInBlock => self.must_be_in_block(),
-            Solver::CompatibilitySearch(n) => self.compatibility_search(n),
+            Solver::CompatibilitySearch => self.compatibility_search(),
             Solver::RadialSearchPromising => self.radial_search_promising(),
             Solver::RadialSearch(n) => self.radial_search(n),
         };
@@ -765,7 +750,7 @@ impl GameState {
 enum Solver {
     ExcludeNInN,
     MustBeInBlock,
-    CompatibilitySearch(u8),
+    CompatibilitySearch,
     RadialSearchPromising,
     RadialSearch(u8),
 }
@@ -781,7 +766,7 @@ pub struct SolverStat {
 pub struct SolverStats {
     exclude_n_in_n: SolverStat,
     must_be_in_block: SolverStat,
-    compatibility_search: [SolverStat; SEARCH_DEPTH],
+    compatibility_search: SolverStat,
     radial_search_promising: SolverStat,
     radial_search: [SolverStat; SEARCH_DEPTH],
 }
@@ -792,7 +777,7 @@ impl Index<Solver> for SolverStats {
         match index {
             Solver::ExcludeNInN => &self.exclude_n_in_n,
             Solver::MustBeInBlock => &self.must_be_in_block,
-            Solver::CompatibilitySearch(n) => &self.compatibility_search[n as usize],
+            Solver::CompatibilitySearch => &self.compatibility_search,
             Solver::RadialSearchPromising => &self.radial_search_promising,
             Solver::RadialSearch(n) => &self.radial_search[n as usize],
         }
@@ -803,7 +788,7 @@ impl IndexMut<Solver> for SolverStats {
         match index {
             Solver::ExcludeNInN => &mut self.exclude_n_in_n,
             Solver::MustBeInBlock => &mut self.must_be_in_block,
-            Solver::CompatibilitySearch(n) => &mut self.compatibility_search[n as usize],
+            Solver::CompatibilitySearch => &mut self.compatibility_search,
             Solver::RadialSearchPromising => &mut self.radial_search_promising,
             Solver::RadialSearch(n) => &mut self.radial_search[n as usize],
         }
@@ -837,12 +822,5 @@ mod tests {
         let mut new_save = Vec::new();
         gs.write_save(&mut new_save);
         assert_eq!(save, new_save);
-    }
-    #[test]
-    fn test_depth_2_search() {
-        let save = std::fs::read("test_data/search_depth_2_test_case").unwrap();
-        let mut gs = GameState::from_save(save.as_slice());
-        gs.compatibility_search(3);
-        assert_eq!(1 << 3 - 1, gs.cells[5].possibilities);
     }
 }
