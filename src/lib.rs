@@ -451,12 +451,11 @@ impl GameState {
     }
     fn compatibility_search_single(&mut self, block_id: usize) -> bool {
         let block = &self.blocks[block_id];
-        let mut seen = vec![None; self.size * self.size];
         let old_joint_possibilities = &block.possibilities;
         // TODO: abort search when down to one possibility
         let new_joint_possibilities: Vec<_> = old_joint_possibilities
             .iter()
-            .filter(|p| self.compatibility_search_inner(block_id, p, &mut seen))
+            .filter(|p| self.compatibility_search_inner(block_id, p))
             .cloned()
             .collect();
         if new_joint_possibilities != *old_joint_possibilities {
@@ -483,6 +482,9 @@ impl GameState {
         self.radial_search_single(block_id)
     }
 
+    // radial_search_single filters for consistency with the immediate neighborhood of a block:
+    // all blocks that can interact directly with it. For every possibility of the target block, it
+    // checks that there exists a consistent sub-solution for the entire neighborhood.
     fn radial_search_single(&mut self, block_id: usize) -> bool {
         let mut new_possibilities = Vec::new();
         let possibilities = &self.blocks[block_id].possibilities;
@@ -589,40 +591,24 @@ impl GameState {
         }
     }
 
-    // checks if there's any solution consistent with seen
-    fn compatibility_search_inner(
-        &self,
-        block_id: usize,
-        block_joint_possibilities: &[i32],
-        seen: &mut [Option<Vec<i32>>],
-    ) -> bool {
+    // checks if every neighbor has a possibility compatiblle with the given possibility.
+    fn compatibility_search_inner(&self, block_id: usize, block_joint_possibility: &[i32]) -> bool {
         let block = &self.blocks[block_id];
-        seen[block_id] = Some(block_joint_possibilities.to_vec());
         let res = block.interacting_blocks.iter().all(|&neighbor_id| {
             let neighbor = &self.blocks[neighbor_id];
-            if let Some(neighbor_joint_possiblities) = seen[neighbor_id].as_ref() {
-                return joint_possibilities_compatible(
-                    self.size,
-                    block_joint_possibilities,
-                    &block.cells,
-                    neighbor_joint_possiblities,
-                    &neighbor.cells,
-                );
-            }
-            self.blocks[neighbor_id]
+            neighbor
                 .possibilities
                 .iter()
-                .any(|neighbor_joint_possiblities| {
+                .any(|neighbor_joint_possiblity| {
                     joint_possibilities_compatible(
                         self.size,
-                        block_joint_possibilities,
+                        block_joint_possibility,
                         &block.cells,
-                        neighbor_joint_possiblities,
+                        neighbor_joint_possiblity,
                         &neighbor.cells,
                     )
                 })
         });
-        seen[block_id] = None;
         res
     }
     fn must_be_in_block(&mut self) -> bool {
