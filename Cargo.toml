@@ -11,6 +11,7 @@ debug = true
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+clap = { version = "4.5.23", features = ["derive"] }
 pest = "2.7.3"
 pest_derive = "2.7.3"
 union-find = "0.4.1"

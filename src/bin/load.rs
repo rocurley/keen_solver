@@ -1,6 +1,6 @@
 use std::io::{stdin, stdout};
 
-use keen_solver::{self, GameState};
+use keen_solver::GameState;
 
 fn main() {
     let mut state = GameState::from_save(stdin().lock());
