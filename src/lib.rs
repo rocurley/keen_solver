@@ -57,7 +57,7 @@ impl BlockInfo {
             self.interacting_blocks.push(ix);
         }
     }
-    fn possibilities<'a>(&'a self, board_size: usize) -> impl 'a + Iterator<Item = Vec<i32>> {
+    fn possibilities(&self, board_size: usize) -> impl '_ + Iterator<Item = Vec<i32>> {
         let is_linear = self.is_linear(board_size);
         let mut it: Box<dyn Iterator<Item = (i32, Vec<i32>)>> =
             Box::new((1..(board_size as i32) + 1).map(|x| (x, vec![x])));
@@ -123,12 +123,11 @@ impl<'a> JointPossibilities<'a> {
             }
             for ((i, x), ci) in self.values.iter().enumerate().zip(self.cells.iter()) {
                 for (y, cj) in self.values[i + 1..].iter().zip(self.cells[i + 1..].iter()) {
-                    if x == y {
-                        if ci / self.board_size == cj / self.board_size
-                            || ci % self.board_size == cj % self.board_size
-                        {
-                            continue 'outer;
-                        }
+                    if x == y
+                        && (ci / self.board_size == cj / self.board_size
+                            || ci % self.board_size == cj % self.board_size)
+                    {
+                        continue 'outer;
                     }
                 }
             }
@@ -384,7 +383,7 @@ impl GameState {
     }
     pub fn write_save(&self, mut out: impl Write) {
         let mut write = |key, value: &str| {
-            write!(out, "{}:{}:{}\n", key, value.len(), value).unwrap();
+            writeln!(out, "{}:{}:{}", key, value.len(), value).unwrap();
         };
         let pencil_moves: Vec<_> = self
             .cells
@@ -601,7 +600,7 @@ impl GameState {
             if let Some(neighbor_joint_possiblities) = seen[neighbor_id].as_ref() {
                 return joint_possibilities_compatible(
                     self.size,
-                    &block_joint_possibilities,
+                    block_joint_possibilities,
                     &block.cells,
                     neighbor_joint_possiblities,
                     &neighbor.cells,
@@ -613,7 +612,7 @@ impl GameState {
                 .any(|neighbor_joint_possiblities| {
                     joint_possibilities_compatible(
                         self.size,
-                        &block_joint_possibilities,
+                        block_joint_possibilities,
                         &block.cells,
                         neighbor_joint_possiblities,
                         &neighbor.cells,
@@ -632,8 +631,8 @@ impl GameState {
                 let mut row_vals = vec![0; self.size];
                 let mut col_vals = vec![0; self.size];
                 for (i, x) in block.cells.iter().zip(joint_possibilities.iter()) {
-                    row_vals[i / self.size] |= 1 << x - 1;
-                    col_vals[i % self.size] |= 1 << x - 1;
+                    row_vals[i / self.size] |= 1 << (x - 1);
+                    col_vals[i % self.size] |= 1 << (x - 1);
                 }
                 for (m1, m2) in row_required.iter_mut().zip(row_vals.into_iter()) {
                     *m1 &= m2;
@@ -674,7 +673,7 @@ impl GameState {
         if self.run_solver(Solver::RadialSearch, &mut stats) {
             return true;
         }
-        return false;
+        false
     }
     fn most_interesting_block(&self) -> (usize, &BlockInfo) {
         self.blocks
@@ -693,7 +692,7 @@ impl GameState {
         let mut kvs = HashMap::new();
         for line in r.lines() {
             let line = line.unwrap();
-            let mut split = line.split(":");
+            let mut split = line.split(':');
             let key = split.next().unwrap().trim().to_owned();
             split.next().unwrap();
             let val = split.next().unwrap().to_owned();
@@ -708,12 +707,12 @@ impl GameState {
             cell.possibilities = 0;
         }
         for raw_move in kvs["MOVE"].iter() {
-            let mut split = raw_move[1..].split(",");
+            let mut split = raw_move[1..].split(',');
             let x: usize = split.next().unwrap().parse().unwrap();
             let y: usize = split.next().unwrap().parse().unwrap();
             let v: usize = split.next().unwrap().parse().unwrap();
             let i = x + y * size;
-            out.cells[i].possibilities |= 1 << v - 1;
+            out.cells[i].possibilities |= 1 << (v - 1);
         }
         out
     }
