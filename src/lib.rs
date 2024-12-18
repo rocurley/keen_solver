@@ -46,8 +46,6 @@ struct BlockInfo {
     last_solver: Option<Solver>,
 }
 
-const SEARCH_DEPTH: usize = 5;
-
 impl BlockInfo {
     fn is_linear(&self, board_size: usize) -> bool {
         let i0 = self.cells[0];
@@ -470,8 +468,7 @@ impl GameState {
         }
     }
 
-    fn radial_search(&mut self, depth: u8) -> bool {
-        assert_eq!(depth, 1);
+    fn radial_search(&mut self) -> bool {
         let mut made_progress = false;
         for block_id in 0..self.blocks.len() {
             made_progress |= self.radial_search_single(block_id);
@@ -487,11 +484,12 @@ impl GameState {
         self.radial_search_single(block_id)
     }
 
-    // depth 1 for now
     fn radial_search_single(&mut self, block_id: usize) -> bool {
         let mut new_possibilities = Vec::new();
         let possibilities = &self.blocks[block_id].possibilities;
         for (i, p) in possibilities.iter().enumerate() {
+            // We assume that the puzzle is valid, so we can just keep the last possibility if
+            // we've eliminated all others.
             if i == possibilities.len() - 1 && new_possibilities.is_empty() {
                 new_possibilities.push(p.clone());
                 continue;
@@ -509,7 +507,6 @@ impl GameState {
         }
     }
 
-    // depth 1 for now
     fn radial_search_single_possibility(&self, block_id: usize, possibility_ix: usize) -> bool {
         let block = &self.blocks[block_id];
         struct SearchBlock<'a> {
@@ -674,7 +671,7 @@ impl GameState {
         if self.run_solver(Solver::RadialSearchPromising, &mut stats) {
             return true;
         }
-        if self.run_solver(Solver::RadialSearch(1), &mut stats) {
+        if self.run_solver(Solver::RadialSearch, &mut stats) {
             return true;
         }
         return false;
@@ -727,7 +724,7 @@ impl GameState {
             Solver::MustBeInBlock => self.must_be_in_block(),
             Solver::CompatibilitySearch => self.compatibility_search(),
             Solver::RadialSearchPromising => self.radial_search_promising(),
-            Solver::RadialSearch(n) => self.radial_search(n),
+            Solver::RadialSearch => self.radial_search(),
         };
         if let Some(ref mut stats) = stats {
             stats[solver].calls += 1;
@@ -752,7 +749,7 @@ enum Solver {
     MustBeInBlock,
     CompatibilitySearch,
     RadialSearchPromising,
-    RadialSearch(u8),
+    RadialSearch,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -768,7 +765,7 @@ pub struct SolverStats {
     must_be_in_block: SolverStat,
     compatibility_search: SolverStat,
     radial_search_promising: SolverStat,
-    radial_search: [SolverStat; SEARCH_DEPTH],
+    radial_search: SolverStat,
 }
 
 impl Index<Solver> for SolverStats {
@@ -779,7 +776,7 @@ impl Index<Solver> for SolverStats {
             Solver::MustBeInBlock => &self.must_be_in_block,
             Solver::CompatibilitySearch => &self.compatibility_search,
             Solver::RadialSearchPromising => &self.radial_search_promising,
-            Solver::RadialSearch(n) => &self.radial_search[n as usize],
+            Solver::RadialSearch => &self.radial_search,
         }
     }
 }
@@ -790,7 +787,7 @@ impl IndexMut<Solver> for SolverStats {
             Solver::MustBeInBlock => &mut self.must_be_in_block,
             Solver::CompatibilitySearch => &mut self.compatibility_search,
             Solver::RadialSearchPromising => &mut self.radial_search_promising,
-            Solver::RadialSearch(n) => &mut self.radial_search[n as usize],
+            Solver::RadialSearch => &mut self.radial_search,
         }
     }
 }
