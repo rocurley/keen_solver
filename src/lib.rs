@@ -32,10 +32,7 @@ impl Constraint {
             Operator::Add => v.iter().sum::<i32>() == self.val,
             Operator::Mul => v.iter().product::<i32>() == self.val,
             Operator::Sub => v[0] - v[1] == self.val || v[1] - v[0] == self.val,
-            Operator::Div => {
-                (v[0] % v[1] == 0 && v[0] / v[1] == self.val)
-                    || (v[1] % v[0] == 0 && v[1] / v[0] == self.val)
-            }
+            Operator::Div => v[0] * self.val == v[1] || v[1] * self.val == v[0],
         }
     }
 }
