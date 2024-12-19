@@ -10,12 +10,15 @@ struct Args {
     /// Collect and print statistics
     #[arg(long)]
     stats: bool,
+    /// Collect and print a log of every solver call. Implies --stats.
+    #[arg(long)]
+    trace: bool,
 }
 
 fn main() {
     let args = Args::parse();
     let stdin = stdin();
-    let mut stats = if args.stats {
+    let mut stats = if args.stats || args.trace {
         Some(SolversStats::default())
     } else {
         None
@@ -34,6 +37,9 @@ fn main() {
         return;
     }
     if let Some(stats) = stats {
-        dbg!(stats);
+        stats.show_stats();
+        if args.trace {
+            stats.show_trace();
+        }
     }
 }

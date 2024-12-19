@@ -14,12 +14,14 @@ writes to.
 
 use std::{
     collections::HashMap,
+    fmt::{Debug, Display},
     io::Write,
     ops::{Index, IndexMut},
 };
 
 use pest::Parser;
 use pest_derive::Parser;
+use tabled::{settings::Style, Table, Tabled};
 use union_find::{QuickUnionUf, UnionByRank, UnionFind};
 
 #[derive(Parser)]
@@ -764,15 +766,32 @@ enum Solver {
     RadialSearchPromising,
     RadialSearch,
 }
+impl Tabled for Solver {
+    const LENGTH: usize = 1;
 
-#[derive(Clone, Debug, Default)]
+    fn fields(&self) -> Vec<std::borrow::Cow<'_, str>> {
+        vec![format!("{:?}", self).into()]
+    }
+
+    fn headers() -> Vec<std::borrow::Cow<'static, str>> {
+        vec!["solver".into()]
+    }
+}
+
+impl Display for Solver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        Debug::fmt(self, f)
+    }
+}
+
+#[derive(Clone, Debug, Default, Tabled)]
 pub struct SolverStats {
     calls: usize,
     successes: usize,
     entropy_removed: f32,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Tabled)]
 pub struct SolverLogEntry {
     solver: Solver,
     success: bool,
@@ -822,6 +841,26 @@ impl SolversStats {
             agg.entropy_removed += entry.entropy_removed;
         }
         self.history.push(entry);
+    }
+    pub fn show_stats(&self) {
+        use Solver::*;
+        let solvers = [
+            ExcludeNInN,
+            MustBeInBlock,
+            CompatibilitySearch,
+            RadialSearchPromising,
+            RadialSearch,
+        ];
+        let table_data = solvers.into_iter().map(|solver| (solver, &self[solver]));
+
+        let mut tab = Table::new(table_data);
+        tab.with((Style::sharp()));
+        println!("{}", tab.to_string());
+    }
+    pub fn show_trace(&self) {
+        let mut tab = Table::new(&self.history);
+        tab.with(Style::sharp());
+        println!("{}", tab.to_string());
     }
 }
 
