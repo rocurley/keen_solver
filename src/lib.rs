@@ -17,6 +17,7 @@ use std::{
     fmt::{Debug, Display},
     io::Write,
     ops::{Index, IndexMut},
+    time::{Duration, Instant},
 };
 
 use pest::Parser;
@@ -728,6 +729,7 @@ impl GameState {
     }
     fn run_solver(&mut self, solver: Solver, stats: &mut Option<&mut SolversStats>) -> bool {
         let initial_entropy = self.entropy();
+        let start = Instant::now();
         let res = match solver {
             Solver::ExcludeNInN => self.exclude_n_in_n(),
             Solver::MustBeInBlock => self.must_be_in_block(),
@@ -745,6 +747,7 @@ impl GameState {
                 solver,
                 success: res,
                 entropy_removed,
+                duration: start.elapsed(),
             };
             stats.log(log_entry);
         }
@@ -789,6 +792,8 @@ pub struct SolverStats {
     calls: usize,
     successes: usize,
     entropy_removed: f32,
+    #[tabled(display_with = "display_duration")]
+    duration: Duration,
 }
 
 #[derive(Clone, Debug, Tabled)]
@@ -796,6 +801,12 @@ pub struct SolverLogEntry {
     solver: Solver,
     success: bool,
     entropy_removed: f32,
+    #[tabled(display_with = "display_duration")]
+    duration: Duration,
+}
+
+fn display_duration(d: &Duration) -> String {
+    format!("{:?}", d)
 }
 
 #[derive(Clone, Debug, Default)]
@@ -839,6 +850,7 @@ impl SolversStats {
         if entry.success {
             agg.successes += 1;
             agg.entropy_removed += entry.entropy_removed;
+            agg.duration += entry.duration;
         }
         self.history.push(entry);
     }
