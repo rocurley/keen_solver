@@ -126,7 +126,7 @@ struct JointPossibilities<'a> {
     values: Vec<i32>,
 }
 
-impl<'a> JointPossibilities<'a> {
+impl JointPossibilities<'_> {
     fn next(&mut self) -> Option<&[i32]> {
         'outer: while next_values_list(self.board_size, &mut self.values) {
             for (pos, x) in self.possibilities.iter().zip(self.values.iter()) {
@@ -535,7 +535,7 @@ impl GameState {
             other_block_ix: usize,
             other_cell_ix: usize,
         }
-        impl<'a> SearchBlock<'a> {
+        impl SearchBlock<'_> {
             fn can_increment(&self) -> bool {
                 self.possibility_ix + 1 < self.block.possibilities.len()
             }
@@ -854,13 +854,13 @@ impl SolversStats {
         let table_data = solvers.into_iter().map(|solver| (solver, &self[solver]));
 
         let mut tab = Table::new(table_data);
-        tab.with((Style::sharp()));
-        println!("{}", tab.to_string());
+        tab.with(Style::sharp());
+        println!("{}", tab);
     }
     pub fn show_trace(&self) {
         let mut tab = Table::new(&self.history);
         tab.with(Style::sharp());
-        println!("{}", tab.to_string());
+        println!("{}", tab);
     }
 }
 
