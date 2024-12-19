@@ -665,7 +665,7 @@ impl GameState {
         }
         made_progress
     }
-    pub fn try_solvers(&mut self, mut stats: Option<&mut SolverStats>) -> bool {
+    pub fn try_solvers(&mut self, mut stats: Option<&mut SolversStats>) -> bool {
         if self.run_solver(Solver::ExcludeNInN, &mut stats) {
             return true;
         }
@@ -724,7 +724,7 @@ impl GameState {
         }
         out
     }
-    fn run_solver(&mut self, solver: Solver, stats: &mut Option<&mut SolverStats>) -> bool {
+    fn run_solver(&mut self, solver: Solver, stats: &mut Option<&mut SolversStats>) -> bool {
         let initial_entropy = self.entropy();
         let res = match solver {
             Solver::ExcludeNInN => self.exclude_n_in_n(),
@@ -734,11 +734,17 @@ impl GameState {
             Solver::RadialSearch => self.radial_search(),
         };
         if let Some(ref mut stats) = stats {
-            stats[solver].calls += 1;
-            if res {
-                stats[solver].successes += 1;
-                stats[solver].entropy_removed += initial_entropy - self.entropy();
-            }
+            let entropy_removed = if res {
+                initial_entropy - self.entropy()
+            } else {
+                0.0
+            };
+            let log_entry = SolverLogEntry {
+                solver,
+                success: res,
+                entropy_removed,
+            };
+            stats.log(log_entry);
         }
         res
     }
@@ -760,23 +766,31 @@ enum Solver {
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct SolverStat {
+pub struct SolverStats {
     calls: usize,
     successes: usize,
     entropy_removed: f32,
 }
 
-#[derive(Clone, Debug, Default)]
-pub struct SolverStats {
-    exclude_n_in_n: SolverStat,
-    must_be_in_block: SolverStat,
-    compatibility_search: SolverStat,
-    radial_search_promising: SolverStat,
-    radial_search: SolverStat,
+#[derive(Clone, Debug)]
+pub struct SolverLogEntry {
+    solver: Solver,
+    success: bool,
+    entropy_removed: f32,
 }
 
-impl Index<Solver> for SolverStats {
-    type Output = SolverStat;
+#[derive(Clone, Debug, Default)]
+pub struct SolversStats {
+    exclude_n_in_n: SolverStats,
+    must_be_in_block: SolverStats,
+    compatibility_search: SolverStats,
+    radial_search_promising: SolverStats,
+    radial_search: SolverStats,
+    history: Vec<SolverLogEntry>,
+}
+
+impl Index<Solver> for SolversStats {
+    type Output = SolverStats;
     fn index(&self, index: Solver) -> &Self::Output {
         match index {
             Solver::ExcludeNInN => &self.exclude_n_in_n,
@@ -787,7 +801,7 @@ impl Index<Solver> for SolverStats {
         }
     }
 }
-impl IndexMut<Solver> for SolverStats {
+impl IndexMut<Solver> for SolversStats {
     fn index_mut(&mut self, index: Solver) -> &mut Self::Output {
         match index {
             Solver::ExcludeNInN => &mut self.exclude_n_in_n,
@@ -796,6 +810,18 @@ impl IndexMut<Solver> for SolverStats {
             Solver::RadialSearchPromising => &mut self.radial_search_promising,
             Solver::RadialSearch => &mut self.radial_search,
         }
+    }
+}
+
+impl SolversStats {
+    fn log(&mut self, entry: SolverLogEntry) {
+        let agg = &mut self[entry.solver];
+        agg.calls += 1;
+        if entry.success {
+            agg.successes += 1;
+            agg.entropy_removed += entry.entropy_removed;
+        }
+        self.history.push(entry);
     }
 }
 

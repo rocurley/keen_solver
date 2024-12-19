@@ -1,7 +1,7 @@
 use std::io::{stdin, stdout, BufRead};
 
 use clap::Parser;
-use keen_solver::SolverStats;
+use keen_solver::SolversStats;
 
 /// Solve keen puzzles
 #[derive(Parser, Debug)]
@@ -16,7 +16,7 @@ fn main() {
     let args = Args::parse();
     let stdin = stdin();
     let mut stats = if args.stats {
-        Some(SolverStats::default())
+        Some(SolversStats::default())
     } else {
         None
     };
