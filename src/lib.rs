@@ -1,3 +1,17 @@
+/*
+No solver considers the entire board at once. They consider subsets of the board. For each solver,
+for each iteration,  there's a subset of the board it takes as input, and a subset of the board it
+writes to.
+    ExcludeNInN:
+        Depends on arbitrary subsets of a row or column, affects the compliment within that row or column.
+    MustBeInBlock:
+        Depends on a block, affects the block's neighbors
+    CompatibilitySearch:
+        Depends on a neighborhood, affects the center of the neighborhood.
+    RadialSearch(Promising):
+        Depends on a neighborhood, affects the center of the neighborhood.
+ */
+
 use std::{
     collections::HashMap,
     io::Write,
@@ -317,9 +331,9 @@ impl GameState {
     fn blocks_from_cells(&mut self) {
         for block in &mut self.blocks {
             block.possibilities.retain(|p| {
-                p.iter()
-                    .zip(block.cells.iter())
-                    .all(|(x, &cell_id)| self.cells[cell_id].possibilities & (1 << (x - 1)) != 0)
+                p.iter().zip(block.cells.iter()).all(|(x, &cell_id)| {
+                    self.cells[cell_id].possibilities & (1 << (x - 1)) != 0
+                })
             });
         }
     }
@@ -346,6 +360,7 @@ impl GameState {
         for transposed in [true, false] {
             for y in 0..self.size {
                 for cell_mask in 1..1 << self.size {
+                    // Union of possibilities in the cells of cell_mask
                     let mut seen = 0;
                     for x in 0..self.size {
                         if (1 << x) & cell_mask > 0 {
@@ -356,15 +371,13 @@ impl GameState {
                     use std::cmp::Ordering;
                     match Bitmask::count_ones(seen).cmp(&Bitmask::count_ones(cell_mask)) {
                         Ordering::Less => {
-                            panic!("fewer possibilities than cells: kill this branch");
+                            panic!("fewer possibilities than cells");
                         }
                         Ordering::Equal => {
                             for x in 0..self.size {
                                 let ix = index(self.size, x, y, transposed);
                                 let old = self.cells[ix].possibilities;
-                                if (1 << x) & cell_mask > 0 {
-                                    self.cells[ix].possibilities &= seen;
-                                } else {
+                                if (1 << x) & cell_mask == 0 {
                                     self.cells[ix].possibilities &= !seen;
                                 }
                                 made_progress |= old != self.cells[ix].possibilities;
@@ -567,8 +580,8 @@ impl GameState {
                 let r_block = &search_space[i];
                 r_block.interactions.iter().any(|interaction| {
                     let local_val = r_block.current_possibility()[interaction.local_cell_ix];
-                    let other_val = search_space[interaction.other_block_ix].current_possibility()
-                        [interaction.other_cell_ix];
+                    let other_val = search_space[interaction.other_block_ix]
+                        .current_possibility()[interaction.other_cell_ix];
                     local_val == other_val
                 })
             });
@@ -592,7 +605,11 @@ impl GameState {
     }
 
     // checks if every neighbor has a possibility compatiblle with the given possibility.
-    fn compatibility_search_inner(&self, block_id: usize, block_joint_possibility: &[i32]) -> bool {
+    fn compatibility_search_inner(
+        &self,
+        block_id: usize,
+        block_joint_possibility: &[i32],
+    ) -> bool {
         let block = &self.blocks[block_id];
         let res = block.interacting_blocks.iter().all(|&neighbor_id| {
             let neighbor = &self.blocks[neighbor_id];
@@ -611,6 +628,8 @@ impl GameState {
         });
         res
     }
+    // If a given block requires that some number be in that block in a specific row or column,
+    // filter out that number from the rest of the row or column.
     fn must_be_in_block(&mut self) -> bool {
         let mut made_progress = false;
         for (block_id, block) in self.blocks.iter().enumerate() {
