@@ -26,7 +26,6 @@ fn main() {
     for game_seed in stdin.lock().lines() {
         let game_seed = game_seed.unwrap();
         let mut state = keen_solver::parse_game_id(&game_seed);
-        state.filter_by_blocks_simple();
         while !state.solved() && state.try_solvers(stats.as_mut()) {}
         if state.solved() {
             //eprintln!("");

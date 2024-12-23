@@ -10,300 +10,23 @@ writes to.
         Depends on a neighborhood, affects the center of the neighborhood.
     RadialSearch(Promising):
         Depends on a neighborhood, affects the center of the neighborhood.
+The basic theory, then, is that we should run a solver on a target when the target's dependencies
+for that solver have changed since the last time that solver was run on that target. Probably the
+easiest way to track this is to, for every solver, keep track of what items are eligible for that
+solver. ExcludeNInN would be a problem if you got really fine grained with it, but keeping it to
+the row and column level for now should be fine.
  */
 
 use std::{
-    collections::HashMap,
     fmt::{Debug, Display},
     io::Write,
     ops::{Index, IndexMut},
     time::{Duration, Instant},
 };
 
-use pest::Parser;
-use pest_derive::Parser;
+pub use game::parse_game_id;
+use game::{Bitmask, BlockInfo, GameState};
 use tabled::{settings::Style, Table, Tabled};
-use union_find::{QuickUnionUf, UnionByRank, UnionFind};
-
-#[derive(Parser)]
-#[grammar = "game_id.pest"]
-struct GameIDParser;
-
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-enum Operator {
-    Add,
-    Mul,
-    Sub,
-    Div,
-}
-
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-struct Constraint {
-    op: Operator,
-    val: i32,
-}
-
-impl Constraint {
-    fn satisfied_by(self, v: &[i32]) -> bool {
-        match self.op {
-            Operator::Add => v.iter().sum::<i32>() == self.val,
-            Operator::Mul => v.iter().product::<i32>() == self.val,
-            Operator::Sub => v[0] - v[1] == self.val || v[1] - v[0] == self.val,
-            Operator::Div => v[0] * self.val == v[1] || v[1] * self.val == v[0],
-        }
-    }
-}
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-struct BlockInfo {
-    constraint: Constraint,
-    cells: Vec<usize>,
-    interacting_blocks: Vec<usize>,
-    possibilities: Vec<Vec<i32>>,
-    last_solver: Option<Solver>,
-}
-
-impl BlockInfo {
-    fn is_linear(&self, board_size: usize) -> bool {
-        let i0 = self.cells[0];
-        self.cells.iter().all(|i| i / board_size == i0 / board_size)
-            || self.cells.iter().all(|i| i % board_size == i0 % board_size)
-    }
-    fn add_interacting(&mut self, ix: usize) {
-        if !self.interacting_blocks.contains(&ix) {
-            self.interacting_blocks.push(ix);
-        }
-    }
-    fn possibilities(&self, board_size: usize) -> impl '_ + Iterator<Item = Vec<i32>> {
-        let is_linear = self.is_linear(board_size);
-        let mut it: Box<dyn Iterator<Item = (i32, Vec<i32>)>> =
-            Box::new((1..(board_size as i32) + 1).map(|x| (x, vec![x])));
-        for _ in 1..self.cells.len() {
-            it = Box::new(it.flat_map(move |(mut lb, v)| {
-                if is_linear {
-                    lb += 1;
-                }
-                (lb..(board_size as i32) + 1).map(move |x| {
-                    let mut v2 = v.clone();
-                    v2.push(x);
-                    (x, v2)
-                })
-            }));
-        }
-        it.map(|(_, v)| v)
-            .filter(|v| self.constraint.satisfied_by(v))
-    }
-    fn joint_possibilities<'a>(
-        &'a self,
-        possibilities: &'a [Bitmask],
-        board_size: usize,
-    ) -> JointPossibilities<'a> {
-        let mut values = vec![1; self.cells.len()];
-        values[0] = 0;
-        JointPossibilities {
-            constraint: self.constraint,
-            cells: &self.cells,
-            possibilities,
-            board_size,
-            values,
-        }
-    }
-    fn fill_in_possibilities(&mut self, board_size: usize) {
-        let dummy_cell_possibilities = vec![(1 << board_size) - 1; self.cells.len()];
-        let mut iter = self.joint_possibilities(&dummy_cell_possibilities, board_size);
-        let mut possiblities = Vec::new();
-        while let Some(p) = iter.next() {
-            possiblities.push(p.to_vec());
-        }
-        self.possibilities = possiblities;
-    }
-}
-
-struct JointPossibilities<'a> {
-    constraint: Constraint,
-    possibilities: &'a [Bitmask],
-    cells: &'a [usize],
-    board_size: usize,
-    values: Vec<i32>,
-}
-
-impl JointPossibilities<'_> {
-    fn next(&mut self) -> Option<&[i32]> {
-        'outer: while next_values_list(self.board_size, &mut self.values) {
-            for (pos, x) in self.possibilities.iter().zip(self.values.iter()) {
-                if pos & (1 << (x - 1)) == 0 {
-                    continue 'outer;
-                }
-            }
-            if !self.constraint.satisfied_by(&self.values) {
-                continue;
-            }
-            for ((i, x), ci) in self.values.iter().enumerate().zip(self.cells.iter()) {
-                for (y, cj) in self.values[i + 1..].iter().zip(self.cells[i + 1..].iter()) {
-                    if x == y
-                        && (ci / self.board_size == cj / self.board_size
-                            || ci % self.board_size == cj % self.board_size)
-                    {
-                        continue 'outer;
-                    }
-                }
-            }
-            return Some(&self.values);
-        }
-        None
-    }
-}
-
-fn next_values_list(board_size: usize, xs: &mut [i32]) -> bool {
-    let board_size = board_size as i32;
-    for x in xs {
-        if *x < board_size {
-            *x += 1;
-            return true;
-        }
-        *x = 1;
-    }
-    false
-}
-
-type Bitmask = u8;
-
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-struct CellInfo {
-    block_id: usize,
-    possibilities: Bitmask,
-}
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct GameState {
-    desc: String,
-    size: usize,
-    cells: Vec<CellInfo>,
-    blocks: Vec<BlockInfo>,
-}
-
-pub fn parse_game_id(raw: &str) -> GameState {
-    let parsed = GameIDParser::parse(Rule::game_id, raw)
-        .unwrap()
-        .next()
-        .unwrap();
-    let mut parsed_iter = parsed.into_inner();
-    let size_pair = parsed_iter.next().unwrap();
-    let gaps_pair = parsed_iter.next().unwrap();
-    let constraints_pair = parsed_iter.next().unwrap();
-
-    let size: usize = size_pair.as_str().parse().unwrap();
-    let desc = format!("{},{}", gaps_pair.as_str(), constraints_pair.as_str());
-
-    let mut lines = vec![false; 2 * size * (size - 1) + 1];
-    let mut i = 0;
-    for gap in gaps_pair.into_inner() {
-        let mut gap_iter = gap.into_inner();
-        let letter_num = gap_iter.next().unwrap().as_str();
-        let gap_size = match letter_num.chars().last().unwrap() {
-            '_' => 0,
-            c => (c as usize - 'a' as usize) + 25 * (letter_num.len() - 1) + 1,
-        };
-        let repeat_count: usize = match gap_iter.next().unwrap().as_str() {
-            "" => 1,
-            s => s.parse().unwrap(),
-        };
-        for _ in 0..repeat_count {
-            i += gap_size;
-            lines[i] = true;
-            i += 1;
-        }
-    }
-    //let lines_str: String = lines.iter().map(|b| if *b { '|' } else { '_' }).collect();
-    //println!("{}", lines_str);
-    //println!("||__||||_|_|||__||_|_||_|_|_|__||||_|||||_|_|||_|||||||_||_|");
-
-    let mut blocks_uf = QuickUnionUf::<UnionByRank>::new(size * size);
-    let mut lines_row_cols = lines.chunks_exact(size - 1);
-    for y in 0..size {
-        let row_lines = lines_row_cols.next().unwrap();
-        for (x, line) in row_lines.iter().enumerate() {
-            if !line {
-                blocks_uf.union(y * size + x, y * size + x + 1);
-            }
-        }
-    }
-    for x in 0..size {
-        let col_lines = lines_row_cols.next().unwrap();
-        for (y, line) in col_lines.iter().enumerate() {
-            if !line {
-                blocks_uf.union(y * size + x, (y + 1) * size + x);
-            }
-        }
-    }
-
-    let mut blocks: Vec<_> = constraints_pair
-        .into_inner()
-        .map(|pair| {
-            let (op_str, val_str) = pair.as_str().split_at(1);
-            let op = match op_str {
-                "a" => Operator::Add,
-                "m" => Operator::Mul,
-                "s" => Operator::Sub,
-                "d" => Operator::Div,
-                _ => panic!("unknown operator"),
-            };
-            let val = val_str.parse().unwrap();
-            BlockInfo {
-                constraint: Constraint { op, val },
-                cells: Vec::new(),
-                interacting_blocks: Vec::new(),
-                possibilities: Vec::new(),
-                last_solver: None,
-            }
-        })
-        .collect();
-
-    let mut seen = HashMap::new();
-    let mut next_block_id = 0;
-    let cells: Vec<CellInfo> = (0..size * size)
-        .map(|i| {
-            let block_id = *seen.entry(blocks_uf.find(i)).or_insert_with(|| {
-                let block_id = next_block_id;
-                next_block_id += 1;
-                block_id
-            });
-            blocks[block_id].cells.push(i);
-            CellInfo {
-                possibilities: ((2 << size) - 1),
-                block_id,
-            }
-        })
-        .collect();
-    for (i, cell) in cells.iter().enumerate() {
-        let block_id = cell.block_id;
-        let x = i % size;
-        let y = i / size;
-        for x2 in 0..size {
-            let other_block_id = cells[x2 + y * size].block_id;
-            if other_block_id != block_id {
-                blocks[block_id].add_interacting(other_block_id);
-            }
-        }
-        for y2 in 0..size {
-            let other_block_id = cells[x + y2 * size].block_id;
-            if other_block_id != block_id {
-                blocks[block_id].add_interacting(other_block_id);
-            }
-        }
-    }
-    for block in blocks.iter_mut() {
-        block.fill_in_possibilities(size);
-    }
-    let mut out = GameState {
-        desc,
-        size,
-        blocks,
-        cells,
-    };
-    out.cells_from_blocks();
-    out
-}
 
 fn iterate_possibilities(size: usize, possiblities: Bitmask) -> impl Iterator<Item = usize> {
     (0..size)
@@ -319,45 +42,412 @@ fn index(size: usize, x: usize, y: usize, transposed: bool) -> usize {
     }
 }
 
-impl GameState {
-    fn cells_from_blocks(&mut self) {
-        for block in &self.blocks {
-            for (i, &cell_id) in block.cells.iter().enumerate() {
-                let mut mask = 0;
-                for possibility in &block.possibilities {
-                    mask |= 1 << (possibility[i] - 1);
-                }
-                self.cells[cell_id].possibilities &= mask;
+pub mod game {
+    use std::{collections::HashMap, fmt::Debug};
+
+    use pest::Parser;
+    use pest_derive::Parser;
+    use union_find::{QuickUnionUf, UnionByRank, UnionFind};
+
+    #[derive(Debug, PartialEq, Eq, Clone, Copy)]
+    enum Operator {
+        Add,
+        Mul,
+        Sub,
+        Div,
+    }
+
+    #[derive(Debug, PartialEq, Eq, Clone, Copy)]
+    pub struct Constraint {
+        op: Operator,
+        val: i32,
+    }
+
+    impl Constraint {
+        fn satisfied_by(self, v: &[i32]) -> bool {
+            match self.op {
+                Operator::Add => v.iter().sum::<i32>() == self.val,
+                Operator::Mul => v.iter().product::<i32>() == self.val,
+                Operator::Sub => v[0] - v[1] == self.val || v[1] - v[0] == self.val,
+                Operator::Div => v[0] * self.val == v[1] || v[1] * self.val == v[0],
             }
         }
     }
-    fn blocks_from_cells(&mut self) {
-        for block in &mut self.blocks {
-            block.possibilities.retain(|p| {
-                p.iter().zip(block.cells.iter()).all(|(x, &cell_id)| {
-                    self.cells[cell_id].possibilities & (1 << (x - 1)) != 0
-                })
-            });
+
+    pub type Bitmask = u8;
+
+    #[readonly::make]
+    #[derive(Debug, PartialEq, Eq, Clone, Copy)]
+    pub struct CellInfo {
+        pub block_id: usize,
+        pub possibilities: Bitmask,
+    }
+
+    #[readonly::make]
+    #[derive(Debug, PartialEq, Eq, Clone)]
+    pub struct BlockInfo {
+        #[readonly]
+        pub constraint: Constraint,
+        #[readonly]
+        pub cells: Vec<usize>,
+        #[readonly]
+        pub interacting_blocks: Vec<usize>,
+        #[readonly]
+        pub possibilities: Vec<Vec<i32>>,
+    }
+
+    impl BlockInfo {
+        fn is_linear(&self, board_size: usize) -> bool {
+            let i0 = self.cells[0];
+            self.cells.iter().all(|i| i / board_size == i0 / board_size)
+                || self.cells.iter().all(|i| i % board_size == i0 % board_size)
+        }
+        fn add_interacting(&mut self, ix: usize) {
+            if !self.interacting_blocks.contains(&ix) {
+                self.interacting_blocks.push(ix);
+            }
+        }
+        pub fn possibilities(&self, board_size: usize) -> impl '_ + Iterator<Item = Vec<i32>> {
+            let is_linear = self.is_linear(board_size);
+            let mut it: Box<dyn Iterator<Item = (i32, Vec<i32>)>> =
+                Box::new((1..(board_size as i32) + 1).map(|x| (x, vec![x])));
+            for _ in 1..self.cells.len() {
+                it = Box::new(it.flat_map(move |(mut lb, v)| {
+                    if is_linear {
+                        lb += 1;
+                    }
+                    (lb..(board_size as i32) + 1).map(move |x| {
+                        let mut v2 = v.clone();
+                        v2.push(x);
+                        (x, v2)
+                    })
+                }));
+            }
+            it.map(|(_, v)| v)
+                .filter(|v| self.constraint.satisfied_by(v))
+        }
+        fn joint_possibilities<'a>(
+            &'a self,
+            possibilities: &'a [Bitmask],
+            board_size: usize,
+        ) -> JointPossibilities<'a> {
+            let mut values = vec![1; self.cells.len()];
+            values[0] = 0;
+            JointPossibilities {
+                constraint: self.constraint,
+                cells: &self.cells,
+                possibilities,
+                board_size,
+                values,
+            }
+        }
+        fn fill_in_possibilities(&mut self, board_size: usize) {
+            let dummy_cell_possibilities = vec![(1 << board_size) - 1; self.cells.len()];
+            let mut iter = self.joint_possibilities(&dummy_cell_possibilities, board_size);
+            let mut possiblities = Vec::new();
+            while let Some(p) = iter.next() {
+                possiblities.push(p.to_vec());
+            }
+            self.possibilities = possiblities;
         }
     }
-    pub fn filter_by_blocks_simple(&mut self) {
-        let block_possibilities: Vec<Bitmask> = self
-            .blocks
-            .iter()
-            .map(|b| {
-                let mut mask = 0;
-                for possibility in b.possibilities(self.size) {
-                    for x in possibility {
-                        mask |= 1 << (x - 1);
+
+    struct JointPossibilities<'a> {
+        constraint: Constraint,
+        possibilities: &'a [Bitmask],
+        cells: &'a [usize],
+        board_size: usize,
+        values: Vec<i32>,
+    }
+
+    fn next_values_list(board_size: usize, xs: &mut [i32]) -> bool {
+        let board_size = board_size as i32;
+        for x in xs {
+            if *x < board_size {
+                *x += 1;
+                return true;
+            }
+            *x = 1;
+        }
+        false
+    }
+
+    impl JointPossibilities<'_> {
+        fn next(&mut self) -> Option<&[i32]> {
+            'outer: while next_values_list(self.board_size, &mut self.values) {
+                for (pos, x) in self.possibilities.iter().zip(self.values.iter()) {
+                    if pos & (1 << (x - 1)) == 0 {
+                        continue 'outer;
                     }
                 }
-                mask
-            })
-            .collect();
-        for cell in self.cells.iter_mut() {
-            cell.possibilities &= block_possibilities[cell.block_id];
+                if !self.constraint.satisfied_by(&self.values) {
+                    continue;
+                }
+                for ((i, x), ci) in self.values.iter().enumerate().zip(self.cells.iter()) {
+                    for (y, cj) in self.values[i + 1..].iter().zip(self.cells[i + 1..].iter()) {
+                        if x == y
+                            && (ci / self.board_size == cj / self.board_size
+                                || ci % self.board_size == cj % self.board_size)
+                        {
+                            continue 'outer;
+                        }
+                    }
+                }
+                return Some(&self.values);
+            }
+            None
         }
     }
+
+    #[derive(Debug, PartialEq, Eq, Clone)]
+    pub struct GameState {
+        pub desc: String,
+        pub size: usize,
+        pub cells: Vec<CellInfo>,
+        pub blocks: Vec<BlockInfo>,
+    }
+    impl GameState {
+        pub fn mask_cell_possibilities(&mut self, cell_id: usize, mask: Bitmask) -> bool {
+            let original = self.cells[cell_id].possibilities;
+            if original == original & mask {
+                return false;
+            }
+            // Filter block possibilities by the new cell possibilities
+            let block_id = self.cells[cell_id].block_id;
+            let block = &mut self.blocks[block_id];
+            let cell_ix_in_block = block.cells.iter().position(|&ix| ix == cell_id).unwrap();
+            block.possibilities.retain(|block_possibility| {
+                (1 << (block_possibility[cell_ix_in_block] - 1)) & mask > 0
+            });
+            self.apply_block_possibilities_to_cells(block_id);
+            self.consistency_check();
+            true
+        }
+        pub fn replace_block_possibilities(
+            &mut self,
+            block_id: usize,
+            new_possibilities: Vec<Vec<i32>>,
+        ) -> bool {
+            let block = &mut self.blocks[block_id];
+            if block.possibilities == new_possibilities {
+                return false;
+            }
+            block.possibilities = new_possibilities;
+            self.apply_block_possibilities_to_cells(block_id);
+            true
+        }
+        fn apply_block_possibilities_to_cells(&mut self, block_id: usize) {
+            let block = &mut self.blocks[block_id];
+            // Filter block cell possibilities by new block possibilities
+            let mut new_cell_values = vec![0; block.cells.len()];
+            for block_possibility in &block.possibilities {
+                for (i, possibility) in block_possibility.iter().enumerate() {
+                    new_cell_values[i] |= 1 << (possibility - 1);
+                }
+            }
+            // Update cells and cell-level elgigibility
+            for (new_cell_value, &ix) in new_cell_values.into_iter().zip(&block.cells) {
+                let cell_value = &mut self.cells[ix].possibilities;
+                if *cell_value == new_cell_value {
+                    continue;
+                }
+                *cell_value = new_cell_value;
+            }
+        }
+        fn initialize_cell_possibilities(&mut self) {
+            let block_possibilities: Vec<Bitmask> = self
+                .blocks
+                .iter()
+                .map(|b| {
+                    let mut mask = 0;
+                    for possibility in b.possibilities(self.size) {
+                        for x in possibility {
+                            mask |= 1 << (x - 1);
+                        }
+                    }
+                    mask
+                })
+                .collect();
+            for cell in self.cells.iter_mut() {
+                cell.possibilities &= block_possibilities[cell.block_id];
+            }
+        }
+        pub fn from_save(r: impl std::io::BufRead) -> Self {
+            let mut kvs = HashMap::new();
+            for line in r.lines() {
+                let line = line.unwrap();
+                let mut split = line.split(':');
+                let key = split.next().unwrap().trim().to_owned();
+                split.next().unwrap();
+                let val = split.next().unwrap().to_owned();
+                kvs.entry(key).or_insert_with(Vec::new).push(val);
+            }
+            let params = &kvs["PARAMS"][0];
+            let size: usize = params[..params.len() - 2].parse().unwrap();
+            let desc = &kvs["DESC"][0];
+            let game_id = format!("{}:{}", size, desc);
+            let mut out = parse_game_id(&game_id);
+            for cell in out.cells.iter_mut() {
+                cell.possibilities = 0;
+            }
+            for raw_move in kvs["MOVE"].iter() {
+                let mut split = raw_move[1..].split(',');
+                let x: usize = split.next().unwrap().parse().unwrap();
+                let y: usize = split.next().unwrap().parse().unwrap();
+                let v: usize = split.next().unwrap().parse().unwrap();
+                let i = x + y * size;
+                out.cells[i].possibilities |= 1 << (v - 1);
+            }
+            out
+        }
+        pub fn print_save(&self) {
+            let mut scratch_vec = Vec::new();
+            self.write_save(&mut scratch_vec);
+            let scratch = String::from_utf8(scratch_vec).unwrap();
+            println!("{}", scratch);
+        }
+        pub fn consistency_check(&self) {
+            for (i, cell) in self.cells.iter().enumerate() {
+                if cell.possibilities == 0 {
+                    self.print_save();
+                    panic!(
+                        "Cell with no possibilities at {}, {}",
+                        i % self.size,
+                        i / self.size
+                    );
+                }
+            }
+        }
+    }
+
+    #[derive(Parser)]
+    #[grammar = "game_id.pest"]
+    struct GameIDParser;
+
+    pub fn parse_game_id(raw: &str) -> GameState {
+        let parsed = GameIDParser::parse(Rule::game_id, raw)
+            .unwrap()
+            .next()
+            .unwrap();
+        let mut parsed_iter = parsed.into_inner();
+        let size_pair = parsed_iter.next().unwrap();
+        let gaps_pair = parsed_iter.next().unwrap();
+        let constraints_pair = parsed_iter.next().unwrap();
+
+        let size: usize = size_pair.as_str().parse().unwrap();
+        let desc = format!("{},{}", gaps_pair.as_str(), constraints_pair.as_str());
+
+        let mut lines = vec![false; 2 * size * (size - 1) + 1];
+        let mut i = 0;
+        for gap in gaps_pair.into_inner() {
+            let mut gap_iter = gap.into_inner();
+            let letter_num = gap_iter.next().unwrap().as_str();
+            let gap_size = match letter_num.chars().last().unwrap() {
+                '_' => 0,
+                c => (c as usize - 'a' as usize) + 25 * (letter_num.len() - 1) + 1,
+            };
+            let repeat_count: usize = match gap_iter.next().unwrap().as_str() {
+                "" => 1,
+                s => s.parse().unwrap(),
+            };
+            for _ in 0..repeat_count {
+                i += gap_size;
+                lines[i] = true;
+                i += 1;
+            }
+        }
+        //let lines_str: String = lines.iter().map(|b| if *b { '|' } else { '_' }).collect();
+        //println!("{}", lines_str);
+        //println!("||__||||_|_|||__||_|_||_|_|_|__||||_|||||_|_|||_|||||||_||_|");
+
+        let mut blocks_uf = QuickUnionUf::<UnionByRank>::new(size * size);
+        let mut lines_row_cols = lines.chunks_exact(size - 1);
+        for y in 0..size {
+            let row_lines = lines_row_cols.next().unwrap();
+            for (x, line) in row_lines.iter().enumerate() {
+                if !line {
+                    blocks_uf.union(y * size + x, y * size + x + 1);
+                }
+            }
+        }
+        for x in 0..size {
+            let col_lines = lines_row_cols.next().unwrap();
+            for (y, line) in col_lines.iter().enumerate() {
+                if !line {
+                    blocks_uf.union(y * size + x, (y + 1) * size + x);
+                }
+            }
+        }
+
+        let mut blocks: Vec<_> = constraints_pair
+            .into_inner()
+            .map(|pair| {
+                let (op_str, val_str) = pair.as_str().split_at(1);
+                let op = match op_str {
+                    "a" => Operator::Add,
+                    "m" => Operator::Mul,
+                    "s" => Operator::Sub,
+                    "d" => Operator::Div,
+                    _ => panic!("unknown operator"),
+                };
+                let val = val_str.parse().unwrap();
+                BlockInfo {
+                    constraint: Constraint { op, val },
+                    cells: Vec::new(),
+                    interacting_blocks: Vec::new(),
+                    possibilities: Vec::new(),
+                }
+            })
+            .collect();
+
+        let mut seen = HashMap::new();
+        let mut next_block_id = 0;
+        let cells: Vec<CellInfo> = (0..size * size)
+            .map(|i| {
+                let block_id = *seen.entry(blocks_uf.find(i)).or_insert_with(|| {
+                    let block_id = next_block_id;
+                    next_block_id += 1;
+                    block_id
+                });
+                blocks[block_id].cells.push(i);
+                CellInfo {
+                    possibilities: ((2 << size) - 1),
+                    block_id,
+                }
+            })
+            .collect();
+        for (i, cell) in cells.iter().enumerate() {
+            let block_id = cell.block_id;
+            let x = i % size;
+            let y = i / size;
+            for x2 in 0..size {
+                let other_block_id = cells[x2 + y * size].block_id;
+                if other_block_id != block_id {
+                    blocks[block_id].add_interacting(other_block_id);
+                }
+            }
+            for y2 in 0..size {
+                let other_block_id = cells[x + y2 * size].block_id;
+                if other_block_id != block_id {
+                    blocks[block_id].add_interacting(other_block_id);
+                }
+            }
+        }
+        for block in blocks.iter_mut() {
+            block.fill_in_possibilities(size);
+        }
+        let mut out = GameState {
+            desc,
+            size,
+            blocks,
+            cells,
+        };
+        out.initialize_cell_possibilities();
+        out
+    }
+}
+
+impl GameState {
     fn exclude_n_in_n(&mut self) -> bool {
         let mut made_progress = false;
         for transposed in [true, false] {
@@ -374,26 +464,27 @@ impl GameState {
                     use std::cmp::Ordering;
                     match Bitmask::count_ones(seen).cmp(&Bitmask::count_ones(cell_mask)) {
                         Ordering::Less => {
+                            self.consistency_check();
+                            self.print_save();
+                            dbg!(transposed, y);
+                            eprintln!("mask: {:#06b}", cell_mask);
                             panic!("fewer possibilities than cells");
                         }
                         Ordering::Equal => {
                             for x in 0..self.size {
                                 let ix = index(self.size, x, y, transposed);
-                                let old = self.cells[ix].possibilities;
                                 if (1 << x) & cell_mask == 0 {
-                                    self.cells[ix].possibilities &= !seen;
+                                    let cell_changed = self.mask_cell_possibilities(ix, !seen);
+                                    if cell_changed {
+                                        made_progress = true;
+                                    }
                                 }
-                                made_progress |= old != self.cells[ix].possibilities;
                             }
                         }
                         Ordering::Greater => {}
                     }
                 }
             }
-        }
-        if made_progress {
-            self.blocks_from_cells();
-            self.cells_from_blocks();
         }
         made_progress
     }
@@ -447,21 +538,12 @@ impl GameState {
             .iter()
             .all(|cell| Bitmask::is_power_of_two(cell.possibilities))
     }
-    pub fn set_block_possibilities(&mut self, i: usize, new_masks: &[Bitmask]) -> bool {
-        let mut changed = false;
-        for (&i, &new_mask) in self.blocks[i].cells.iter().zip(new_masks.iter()) {
-            changed |= self.cells[i].possibilities != new_mask;
-            self.cells[i].possibilities = new_mask;
-        }
-        changed
-    }
     pub fn compatibility_search(&mut self) -> bool {
         let mut made_progress = false;
         for block_id in 0..self.blocks.len() {
-            made_progress |= self.compatibility_search_single(block_id);
-        }
-        if made_progress {
-            self.cells_from_blocks();
+            if self.compatibility_search_single(block_id) {
+                made_progress = true;
+            }
         }
         made_progress
     }
@@ -474,21 +556,16 @@ impl GameState {
             .filter(|p| self.compatibility_search_inner(block_id, p))
             .cloned()
             .collect();
-        if new_joint_possibilities != *old_joint_possibilities {
-            self.blocks[block_id].possibilities = new_joint_possibilities;
-            true
-        } else {
-            false
-        }
+        let made_progress = self.replace_block_possibilities(block_id, new_joint_possibilities);
+        made_progress
     }
 
     fn radial_search(&mut self) -> bool {
         let mut made_progress = false;
         for block_id in 0..self.blocks.len() {
-            made_progress |= self.radial_search_single(block_id);
-        }
-        if made_progress {
-            self.cells_from_blocks();
+            if self.radial_search_single(block_id) {
+                made_progress = true;
+            }
         }
         made_progress
     }
@@ -516,12 +593,8 @@ impl GameState {
             }
             new_possibilities.push(p.clone());
         }
-        if new_possibilities != self.blocks[block_id].possibilities {
-            self.blocks[block_id].possibilities = new_possibilities;
-            true
-        } else {
-            false
-        }
+        let made_progress = self.replace_block_possibilities(block_id, new_possibilities);
+        made_progress
     }
 
     fn radial_search_single_possibility(&self, block_id: usize, possibility_ix: usize) -> bool {
@@ -635,7 +708,8 @@ impl GameState {
     // filter out that number from the rest of the row or column.
     fn must_be_in_block(&mut self) -> bool {
         let mut made_progress = false;
-        for (block_id, block) in self.blocks.iter().enumerate() {
+        for block_id in 0..self.blocks.len() {
+            let block = &self.blocks[block_id];
             let mut row_required = vec![(1 << self.size) - 1; self.size];
             let mut col_required = vec![(1 << self.size) - 1; self.size];
             for joint_possibilities in &block.possibilities {
@@ -652,23 +726,19 @@ impl GameState {
                     *m1 &= m2;
                 }
             }
-            for (i, cell) in self.cells.iter_mut().enumerate() {
-                if cell.block_id == block_id {
+            for i in 0..self.cells.len() {
+                if self.cells[i].block_id == block_id {
                     continue;
                 }
-                let original = cell.possibilities;
-                cell.possibilities &= !row_required[i / self.size];
-                cell.possibilities &= !col_required[i % self.size];
-                made_progress |= original != cell.possibilities;
+                let mask = !row_required[i / self.size] & !col_required[i % self.size];
+                let cell_changed = self.mask_cell_possibilities(i, mask);
+                made_progress |= cell_changed;
             }
-        }
-        if made_progress {
-            self.blocks_from_cells();
-            self.cells_from_blocks();
         }
         made_progress
     }
     pub fn try_solvers(&mut self, mut stats: Option<&mut SolversStats>) -> bool {
+        self.consistency_check();
         if self.run_solver(Solver::ExcludeNInN, &mut stats) {
             return true;
         }
@@ -699,37 +769,10 @@ impl GameState {
             })
             .unwrap()
     }
-    pub fn from_save(r: impl std::io::BufRead) -> Self {
-        let mut kvs = HashMap::new();
-        for line in r.lines() {
-            let line = line.unwrap();
-            let mut split = line.split(':');
-            let key = split.next().unwrap().trim().to_owned();
-            split.next().unwrap();
-            let val = split.next().unwrap().to_owned();
-            kvs.entry(key).or_insert_with(Vec::new).push(val);
-        }
-        let params = &kvs["PARAMS"][0];
-        let size: usize = params[..params.len() - 2].parse().unwrap();
-        let desc = &kvs["DESC"][0];
-        let game_id = format!("{}:{}", size, desc);
-        let mut out = parse_game_id(&game_id);
-        for cell in out.cells.iter_mut() {
-            cell.possibilities = 0;
-        }
-        for raw_move in kvs["MOVE"].iter() {
-            let mut split = raw_move[1..].split(',');
-            let x: usize = split.next().unwrap().parse().unwrap();
-            let y: usize = split.next().unwrap().parse().unwrap();
-            let v: usize = split.next().unwrap().parse().unwrap();
-            let i = x + y * size;
-            out.cells[i].possibilities |= 1 << (v - 1);
-        }
-        out
-    }
     fn run_solver(&mut self, solver: Solver, stats: &mut Option<&mut SolversStats>) -> bool {
         let initial_entropy = self.entropy();
         let start = Instant::now();
+        //dbg!(solver);
         let res = match solver {
             Solver::ExcludeNInN => self.exclude_n_in_n(),
             Solver::MustBeInBlock => self.must_be_in_block(),
