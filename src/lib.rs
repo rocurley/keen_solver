@@ -94,6 +94,9 @@ pub mod game {
         pub interacting_blocks: Vec<usize>,
         #[readonly]
         pub possibilities: Vec<Vec<i32>>,
+        pub must_be_in_block_eligible: bool,
+        pub compatibility_search_eligible: bool,
+        pub radial_search_eligible: bool,
     }
 
     impl BlockInfo {
@@ -205,6 +208,9 @@ pub mod game {
         pub size: usize,
         pub cells: Vec<CellInfo>,
         pub blocks: Vec<BlockInfo>,
+        pub rows_exclude_n_in_n_eligible: Vec<bool>,
+        pub cols_exclude_n_in_n_eligible: Vec<bool>,
+        pub skip_inelligible: bool,
     }
     impl GameState {
         pub fn mask_cell_possibilities(&mut self, cell_id: usize, mask: Bitmask) -> bool {
@@ -223,6 +229,7 @@ pub mod game {
             self.consistency_check();
             true
         }
+        // NOTE: will incorrectly refresh eligibility if the order is different.
         pub fn replace_block_possibilities(
             &mut self,
             block_id: usize,
@@ -252,6 +259,22 @@ pub mod game {
                     continue;
                 }
                 *cell_value = new_cell_value;
+                let x = ix % self.size;
+                let y = ix / self.size;
+                self.rows_exclude_n_in_n_eligible[y] = true;
+                self.cols_exclude_n_in_n_eligible[x] = true;
+            }
+            self.mark_block_changed(block_id);
+        }
+        fn mark_block_changed(&mut self, block_id: usize) {
+            let block = &mut self.blocks[block_id];
+            block.must_be_in_block_eligible = true;
+            block.compatibility_search_eligible = true;
+            block.radial_search_eligible = true;
+            for neighbor_id in block.interacting_blocks.clone() {
+                let neighbor = &mut self.blocks[neighbor_id];
+                neighbor.compatibility_search_eligible = true;
+                neighbor.radial_search_eligible = true;
             }
         }
         fn initialize_cell_possibilities(&mut self) {
@@ -396,6 +419,9 @@ pub mod game {
                     cells: Vec::new(),
                     interacting_blocks: Vec::new(),
                     possibilities: Vec::new(),
+                    must_be_in_block_eligible: true,
+                    compatibility_search_eligible: true,
+                    radial_search_eligible: true,
                 }
             })
             .collect();
@@ -441,6 +467,9 @@ pub mod game {
             size,
             blocks,
             cells,
+            rows_exclude_n_in_n_eligible: vec![true; size],
+            cols_exclude_n_in_n_eligible: vec![true; size],
+            skip_inelligible: false,
         };
         out.initialize_cell_possibilities();
         out
@@ -448,10 +477,24 @@ pub mod game {
 }
 
 impl GameState {
+    fn exclude_n_in_n_eligible(&mut self, y: usize, transposed: bool) -> &mut bool {
+        if transposed {
+            &mut self.cols_exclude_n_in_n_eligible[y]
+        } else {
+            &mut self.rows_exclude_n_in_n_eligible[y]
+        }
+    }
     fn exclude_n_in_n(&mut self) -> bool {
         let mut made_progress = false;
+        let skip_inelligible = self.skip_inelligible;
         for transposed in [true, false] {
             for y in 0..self.size {
+                let eligibility = self.exclude_n_in_n_eligible(y, transposed);
+                let was_eligible = *eligibility;
+                if !*eligibility && skip_inelligible {
+                    continue;
+                }
+                *eligibility = false;
                 for cell_mask in 1..1 << self.size {
                     // Union of possibilities in the cells of cell_mask
                     let mut seen = 0;
@@ -476,6 +519,14 @@ impl GameState {
                                 if (1 << x) & cell_mask == 0 {
                                     let cell_changed = self.mask_cell_possibilities(ix, !seen);
                                     if cell_changed {
+                                        if !was_eligible {
+                                            self.print_save();
+                                            dbg!(transposed, y);
+                                            eprintln!("mask: {:b}", cell_mask);
+                                            panic!(
+                                                "Supposedly ineligbile row/col made progress."
+                                            );
+                                        }
                                         made_progress = true;
                                     }
                                 }
@@ -541,8 +592,16 @@ impl GameState {
     pub fn compatibility_search(&mut self) -> bool {
         let mut made_progress = false;
         for block_id in 0..self.blocks.len() {
+            let eligible = self.blocks[block_id].compatibility_search_eligible;
+            if !eligible && self.skip_inelligible {
+                continue;
+            }
             if self.compatibility_search_single(block_id) {
                 made_progress = true;
+                assert!(
+                    eligible,
+                    "Supposedly ineligible compatibility search block made progress",
+                );
             }
         }
         made_progress
@@ -557,14 +616,23 @@ impl GameState {
             .cloned()
             .collect();
         let made_progress = self.replace_block_possibilities(block_id, new_joint_possibilities);
+        self.blocks[block_id].compatibility_search_eligible = false;
         made_progress
     }
 
     fn radial_search(&mut self) -> bool {
         let mut made_progress = false;
         for block_id in 0..self.blocks.len() {
+            let eligible = self.blocks[block_id].radial_search_eligible;
+            if !eligible && self.skip_inelligible {
+                continue;
+            }
             if self.radial_search_single(block_id) {
                 made_progress = true;
+                assert!(
+                    eligible,
+                    "Supposedly ineligible radial search block made progress",
+                );
             }
         }
         made_progress
@@ -594,6 +662,7 @@ impl GameState {
             new_possibilities.push(p.clone());
         }
         let made_progress = self.replace_block_possibilities(block_id, new_possibilities);
+        self.blocks[block_id].radial_search_eligible = false;
         made_progress
     }
 
@@ -710,6 +779,10 @@ impl GameState {
         let mut made_progress = false;
         for block_id in 0..self.blocks.len() {
             let block = &self.blocks[block_id];
+            if !block.must_be_in_block_eligible && self.skip_inelligible {
+                continue;
+            }
+            let was_eligible = block.must_be_in_block_eligible;
             let mut row_required = vec![(1 << self.size) - 1; self.size];
             let mut col_required = vec![(1 << self.size) - 1; self.size];
             for joint_possibilities in &block.possibilities {
@@ -733,7 +806,12 @@ impl GameState {
                 let mask = !row_required[i / self.size] & !col_required[i % self.size];
                 let cell_changed = self.mask_cell_possibilities(i, mask);
                 made_progress |= cell_changed;
+                assert!(
+                    !cell_changed || was_eligible,
+                    "Supposedly ineligible must be in block block made progress",
+                );
             }
+            self.blocks[block_id].must_be_in_block_eligible = false;
         }
         made_progress
     }
@@ -760,7 +838,7 @@ impl GameState {
         self.blocks
             .iter()
             .enumerate()
-            .filter(|(_, block)| block.possibilities.len() > 1)
+            .filter(|(_, block)| block.radial_search_eligible && block.possibilities.len() > 1)
             .min_by_key(|(_, block)| {
                 (
                     block.cells.len() * 4 * 3 * 5 / block.possibilities.len(),
