@@ -226,7 +226,6 @@ pub mod game {
                 (1 << (block_possibility[cell_ix_in_block] - 1)) & mask > 0
             });
             self.apply_block_possibilities_to_cells(block_id);
-            self.consistency_check();
             true
         }
         // NOTE: will incorrectly refresh eligibility if the order is different.
@@ -469,7 +468,7 @@ pub mod game {
             cells,
             rows_exclude_n_in_n_eligible: vec![true; size],
             cols_exclude_n_in_n_eligible: vec![true; size],
-            skip_inelligible: false,
+            skip_inelligible: true,
         };
         out.initialize_cell_possibilities();
         out
@@ -507,7 +506,6 @@ impl GameState {
                     use std::cmp::Ordering;
                     match Bitmask::count_ones(seen).cmp(&Bitmask::count_ones(cell_mask)) {
                         Ordering::Less => {
-                            self.consistency_check();
                             self.print_save();
                             dbg!(transposed, y);
                             eprintln!("mask: {:#06b}", cell_mask);
@@ -816,7 +814,6 @@ impl GameState {
         made_progress
     }
     pub fn try_solvers(&mut self, mut stats: Option<&mut SolversStats>) -> bool {
-        self.consistency_check();
         if self.run_solver(Solver::ExcludeNInN, &mut stats) {
             return true;
         }
