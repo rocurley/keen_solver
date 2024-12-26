@@ -1,0 +1,9 @@
+0: no clue
+1: two blocks entirely in two columns that have a shared mandatory number clearing out that number
+2: no clue, but there's an obvious lead where only one block in a column can have a 5 and it hasn't realized it yet.
+3: product of non-multiplication cells in bottom 2 rows was 180. Two blocks had only 2 possibilities up to permutation, and only 1 combination was valid, letting us solve those two blocks up to permutation and fill in the remaining non-multiplication cell directly. It's simple to get from there to what radial search got.
+4: subset counting (1,2,3) shows that the -1 block in question can have at most one small number, eliminating 1 and 2. Unclear how to progress from there.
+5: product of non-multipication cells gets us somewhere, but not very far. No clue how it got the whole block.
+6: no clue. However, it appears that block possibilities don't check whether an arangement would put the same number in the same column/row, producing for example 6 1 1 for a bent x6, with 6 not in the corner.
+7: No clue. Interesting that it's another 12=2+4+6 though.
+8: 5 is required, which solves it up to permutation. With that, a cell can be filled in by using the product of two columns, and then the rest is easily solved.

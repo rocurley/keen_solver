@@ -880,7 +880,7 @@ impl GameState {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-enum Solver {
+pub enum Solver {
     ExcludeNInN,
     MustBeInBlock,
     CompatibilitySearch,
@@ -916,11 +916,11 @@ pub struct SolverStats {
 
 #[derive(Clone, Debug, Tabled)]
 pub struct SolverLogEntry {
-    solver: Solver,
-    success: bool,
-    entropy_removed: f32,
+    pub solver: Solver,
+    pub success: bool,
+    pub entropy_removed: f32,
     #[tabled(display_with = "display_duration")]
-    duration: Duration,
+    pub duration: Duration,
 }
 
 fn display_duration(d: &Duration) -> String {
@@ -929,12 +929,12 @@ fn display_duration(d: &Duration) -> String {
 
 #[derive(Clone, Debug, Default)]
 pub struct SolversStats {
-    exclude_n_in_n: SolverStats,
-    must_be_in_block: SolverStats,
-    compatibility_search: SolverStats,
-    radial_search_promising: SolverStats,
-    radial_search: SolverStats,
-    history: Vec<SolverLogEntry>,
+    pub exclude_n_in_n: SolverStats,
+    pub must_be_in_block: SolverStats,
+    pub compatibility_search: SolverStats,
+    pub radial_search_promising: SolverStats,
+    pub radial_search: SolverStats,
+    pub history: Vec<SolverLogEntry>,
 }
 
 impl Index<Solver> for SolversStats {
