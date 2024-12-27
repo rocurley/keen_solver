@@ -919,6 +919,9 @@ impl GameState {
         if self.run_solver(Solver::MustBeInBlock, &mut stats) {
             return true;
         }
+        if self.run_solver(Solver::OnlyInBlock, &mut stats) {
+            return true;
+        }
         if self.run_solver(Solver::CompatibilitySearch, &mut stats) {
             return true;
         }
@@ -950,6 +953,7 @@ impl GameState {
         let res = match solver {
             Solver::ExcludeNInN => self.exclude_n_in_n(),
             Solver::MustBeInBlock => self.must_be_in_block(),
+            Solver::OnlyInBlock => self.only_in_block(),
             Solver::CompatibilitySearch => self.compatibility_search(),
             Solver::RadialSearchPromising => self.radial_search_promising(),
             Solver::RadialSearch => self.radial_search(),
@@ -1002,6 +1006,7 @@ fn running_possible_sums<'a>(it: impl Iterator<Item = &'a HashSet<u32>>) -> Vec<
 pub enum Solver {
     ExcludeNInN,
     MustBeInBlock,
+    OnlyInBlock,
     CompatibilitySearch,
     RadialSearchPromising,
     RadialSearch,
@@ -1050,6 +1055,7 @@ fn display_duration(d: &Duration) -> String {
 pub struct SolversStats {
     pub exclude_n_in_n: SolverStats,
     pub must_be_in_block: SolverStats,
+    pub only_in_block: SolverStats,
     pub compatibility_search: SolverStats,
     pub radial_search_promising: SolverStats,
     pub radial_search: SolverStats,
@@ -1062,6 +1068,7 @@ impl Index<Solver> for SolversStats {
         match index {
             Solver::ExcludeNInN => &self.exclude_n_in_n,
             Solver::MustBeInBlock => &self.must_be_in_block,
+            Solver::OnlyInBlock => &self.only_in_block,
             Solver::CompatibilitySearch => &self.compatibility_search,
             Solver::RadialSearchPromising => &self.radial_search_promising,
             Solver::RadialSearch => &self.radial_search,
@@ -1073,6 +1080,7 @@ impl IndexMut<Solver> for SolversStats {
         match index {
             Solver::ExcludeNInN => &mut self.exclude_n_in_n,
             Solver::MustBeInBlock => &mut self.must_be_in_block,
+            Solver::OnlyInBlock => &mut self.only_in_block,
             Solver::CompatibilitySearch => &mut self.compatibility_search,
             Solver::RadialSearchPromising => &mut self.radial_search_promising,
             Solver::RadialSearch => &mut self.radial_search,
@@ -1096,6 +1104,7 @@ impl SolversStats {
         let solvers = [
             ExcludeNInN,
             MustBeInBlock,
+            OnlyInBlock,
             CompatibilitySearch,
             RadialSearchPromising,
             RadialSearch,
