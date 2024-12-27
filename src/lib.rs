@@ -311,16 +311,17 @@ pub mod game {
             let desc = &kvs["DESC"][0];
             let game_id = format!("{}:{}", size, desc);
             let mut out = parse_game_id(&game_id);
-            for cell in out.cells.iter_mut() {
-                cell.possibilities = 0;
-            }
+            let mut cell_possibilities = vec![0; size * size];
             for raw_move in kvs["MOVE"].iter() {
                 let mut split = raw_move[1..].split(',');
                 let x: usize = split.next().unwrap().parse().unwrap();
                 let y: usize = split.next().unwrap().parse().unwrap();
                 let v: usize = split.next().unwrap().parse().unwrap();
                 let i = x + y * size;
-                out.cells[i].possibilities |= 1 << (v - 1);
+                cell_possibilities[i] |= 1 << (v - 1);
+            }
+            for (i, mask) in cell_possibilities.into_iter().enumerate() {
+                out.mask_cell_possibilities(i, mask);
             }
             out
         }
@@ -821,89 +822,96 @@ impl GameState {
     // have a 3/6, the block that may contain a 3/6 must contain a 3/6.
     fn only_in_block(&mut self) -> bool {
         let mut made_progress = false;
-        let size = self.size;
         for transposed in [true, false] {
             for y in 0..self.size {
-                let in_row: Box<dyn Fn(&usize) -> bool> = if transposed {
-                    Box::new(|ix| ix % size == y)
-                } else {
-                    Box::new(|ix| ix / size == y)
-                };
-                let relevant_blocks = self
-                    .blocks
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, block)| block.cells.iter().any(&in_row));
-                // block_bitsets holds the possibilities of the currently relevant blocks, with
-                // cells outside the current row ignored and flattened down to a set.
-                let mut block_bitsets: Vec<_> = relevant_blocks
-                    .map(|(block_id, block)| {
-                        // TODO: some strange behaviour with colinear identical values in the same
-                        // possibiltiy, which is currently allowed. It probably won't affect
-                        // correctness.
-                        let bitset_possibilities: Vec<_> = block
-                            .possibilities
-                            .iter()
-                            .map(|possibility| {
-                                zip(possibility, &block.cells)
-                                    .filter(|(_, ix)| in_row(ix))
-                                    .map(|(value, _)| (1 << value - 1))
-                                    .fold(0, Bitmask::bitor)
-                            })
-                            .collect();
-                        (block_id, bitset_possibilities)
-                    })
-                    .collect();
-                for value_mask in 1..1 << self.size {
-                    // For every relevant block, match_counts stores the number of matches
-                    // acheivable across the different possibilities. For example, when matching
-                    // 2,4,6 against possibilities [(1,2),(2,4),(3,6)] the result will be {1,2}.
-                    // Matching 3,6 would yield {0,2}.
-                    // TODO: could we use bitsets instead? Yes, but this is already too
-                    // complicated. Make a proper bitset type before doing that.
-                    let match_counts: Vec<HashSet<u32>> = block_bitsets
-                        .iter()
-                        .map(|(_, bitsets)| {
-                            bitsets
-                                .iter()
-                                .map(|bitset| (bitset & value_mask).count_ones())
-                                .collect()
-                        })
-                        .collect();
-                    let forward_counts = running_possible_sums(match_counts.iter());
-                    let mut reverse_counts = running_possible_sums(match_counts.iter().rev());
-                    reverse_counts.reverse();
-                    for (i, (block_id, bitsets)) in block_bitsets.iter_mut().enumerate() {
-                        let prior_counts = &forward_counts[i];
-                        let following_counts = &reverse_counts[i + 1];
-                        let other_counts = possible_sums(prior_counts, following_counts);
-                        let mut to_remove = Vec::new();
-                        for (possibility_ix, bitset) in bitsets.iter().enumerate().rev() {
-                            let possibility_count = (bitset & value_mask).count_ones();
-                            if !other_counts.contains(&(self.size as u32 - possibility_count)) {
-                                to_remove.push(possibility_ix);
-                            }
-                        }
-                        if to_remove.is_empty() {
-                            continue;
-                        }
-                        let mut new_possibilities =
-                            self.blocks[*block_id].possibilities.clone();
-                        for j in to_remove {
-                            new_possibilities.remove(j);
-                            bitsets.remove(j);
-                            // TODO: in principle, if we were accumulating prior_counts as we went,
-                            // we could keep prior counts accurate, allowing us to remove more. Too
-                            // complicated to start with though.
-                        }
-                        self.replace_block_possibilities(*block_id, new_possibilities);
-                        made_progress = true;
-                    }
-                }
+                // TODO: eligibility tracking
+                made_progress |= self.only_in_block_single(transposed, y);
             }
         }
         made_progress
     }
+
+    fn only_in_block_single(&mut self, transposed: bool, y: usize) -> bool {
+        let size = self.size;
+        let in_row: Box<dyn Fn(&usize) -> bool> = if transposed {
+            Box::new(|ix| ix % size == y)
+        } else {
+            Box::new(|ix| ix / size == y)
+        };
+        let relevant_blocks = self
+            .blocks
+            .iter()
+            .enumerate()
+            .filter(|(_, block)| block.cells.iter().any(&in_row));
+        // block_bitsets holds the possibilities of the currently relevant blocks, with cells
+        // outside the current row ignored and flattened down to a set.
+        let mut block_bitsets: Vec<_> = relevant_blocks
+            .map(|(block_id, block)| {
+                // TODO: some strange behaviour with colinear identical values in the same
+                // possibiltiy, which is currently allowed. It probably won't affect correctness.
+                let bitset_possibilities: Vec<_> = block
+                    .possibilities
+                    .iter()
+                    .map(|possibility| {
+                        zip(possibility, &block.cells)
+                            .filter(|(_, ix)| in_row(ix))
+                            .map(|(value, _)| (1 << value - 1))
+                            .fold(0, Bitmask::bitor)
+                    })
+                    .collect();
+                (block_id, bitset_possibilities)
+            })
+            .collect();
+        let mut made_progress = false;
+        for value_mask in 1..1 << self.size {
+            // For every relevant block, match_counts stores the number of matches
+            // acheivable across the different possibilities. For example, when matching
+            // 2,4,6 against possibilities [(1,2),(2,4),(3,6)] the result will be {1,2}.
+            // Matching 3,6 would yield {0,2}.
+            // TODO: could we use bitsets instead? Yes, but this is already too
+            // complicated. Make a proper bitset type before doing that.
+            let match_counts: Vec<HashSet<u32>> = block_bitsets
+                .iter()
+                .map(|(_, bitsets)| {
+                    bitsets
+                        .iter()
+                        .map(|bitset| (bitset & value_mask).count_ones())
+                        .collect()
+                })
+                .collect();
+            let forward_counts = running_possible_sums(match_counts.iter());
+            let mut reverse_counts = running_possible_sums(match_counts.iter().rev());
+            reverse_counts.reverse();
+            for (i, (block_id, bitsets)) in block_bitsets.iter_mut().enumerate() {
+                let prior_counts = &forward_counts[i];
+                let following_counts = &reverse_counts[i + 1];
+                let other_counts = possible_sums(prior_counts, following_counts);
+                let mut to_remove = Vec::new();
+                // Iterate backwards so indices are valid as we remove
+                for (possibility_ix, bitset) in bitsets.iter().enumerate().rev() {
+                    let possibility_count = (bitset & value_mask).count_ones();
+                    if !other_counts.contains(&(self.size as u32 - possibility_count)) {
+                        to_remove.push(possibility_ix);
+                    }
+                }
+                if to_remove.is_empty() {
+                    continue;
+                }
+                let mut new_possibilities = self.blocks[*block_id].possibilities.clone();
+                for j in to_remove {
+                    new_possibilities.remove(j);
+                    bitsets.remove(j);
+                    // TODO: in principle, if we were accumulating prior_counts as we went,
+                    // we could keep prior counts accurate, allowing us to remove more. Too
+                    // complicated to start with though.
+                }
+                self.replace_block_possibilities(*block_id, new_possibilities);
+                made_progress = true;
+            }
+        }
+        made_progress
+    }
+
     pub fn try_solvers(&mut self, mut stats: Option<&mut SolversStats>) -> bool {
         if self.run_solver(Solver::ExcludeNInN, &mut stats) {
             return true;
@@ -1132,5 +1140,15 @@ mod tests {
         let mut new_save = Vec::new();
         gs.write_save(&mut new_save);
         assert_eq!(save, new_save);
+    }
+    #[test]
+    fn test_only_in_block() {
+        let save = std::fs::read("test_data/single_5_possibility").unwrap();
+        let mut gs = GameState::from_save(save.as_slice());
+        let block_id = gs.cells[5].block_id;
+        dbg!(&gs.blocks[block_id]);
+        assert_eq!(gs.blocks[block_id].possibilities.len(), 4);
+        assert!(gs.only_in_block_single(true, 5));
+        assert_eq!(gs.blocks[block_id].possibilities.len(), 2);
     }
 }
