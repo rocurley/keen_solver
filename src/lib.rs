@@ -18,9 +18,11 @@ the row and column level for now should be fine.
  */
 
 use std::{
+    collections::HashSet,
     fmt::{Debug, Display},
     io::Write,
-    ops::{Index, IndexMut},
+    iter::zip,
+    ops::{BitOr, Index, IndexMut},
     time::{Duration, Instant},
 };
 
@@ -773,6 +775,7 @@ impl GameState {
     }
     // If a given block requires that some number be in that block in a specific row or column,
     // filter out that number from the rest of the row or column.
+    // Example: filter out 2 from a row containing a /2 block with possibilities (1,2,4)
     fn must_be_in_block(&mut self) -> bool {
         let mut made_progress = false;
         for block_id in 0..self.blocks.len() {
@@ -810,6 +813,94 @@ impl GameState {
                 );
             }
             self.blocks[block_id].must_be_in_block_eligible = false;
+        }
+        made_progress
+    }
+    // Finds subsets of values that must occur within a block. For example, if in a given row
+    // there's one block that may contain a 3/6, and one block that must, and no other cells may
+    // have a 3/6, the block that may contain a 3/6 must contain a 3/6.
+    fn only_in_block(&mut self) -> bool {
+        let mut made_progress = false;
+        let size = self.size;
+        for transposed in [true, false] {
+            for y in 0..self.size {
+                let in_row: Box<dyn Fn(&usize) -> bool> = if transposed {
+                    Box::new(|ix| ix % size == y)
+                } else {
+                    Box::new(|ix| ix / size == y)
+                };
+                let relevant_blocks = self
+                    .blocks
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, block)| block.cells.iter().any(&in_row));
+                // block_bitsets holds the possibilities of the currently relevant blocks, with
+                // cells outside the current row ignored and flattened down to a set.
+                let mut block_bitsets: Vec<_> = relevant_blocks
+                    .map(|(block_id, block)| {
+                        // TODO: some strange behaviour with colinear identical values in the same
+                        // possibiltiy, which is currently allowed. It probably won't affect
+                        // correctness.
+                        let bitset_possibilities: Vec<_> = block
+                            .possibilities
+                            .iter()
+                            .map(|possibility| {
+                                zip(possibility, &block.cells)
+                                    .filter(|(_, ix)| in_row(ix))
+                                    .map(|(value, _)| (1 << value - 1))
+                                    .fold(0, Bitmask::bitor)
+                            })
+                            .collect();
+                        (block_id, bitset_possibilities)
+                    })
+                    .collect();
+                for value_mask in 1..1 << self.size {
+                    // For every relevant block, match_counts stores the number of matches
+                    // acheivable across the different possibilities. For example, when matching
+                    // 2,4,6 against possibilities [(1,2),(2,4),(3,6)] the result will be {1,2}.
+                    // Matching 3,6 would yield {0,2}.
+                    // TODO: could we use bitsets instead? Yes, but this is already too
+                    // complicated. Make a proper bitset type before doing that.
+                    let match_counts: Vec<HashSet<u32>> = block_bitsets
+                        .iter()
+                        .map(|(_, bitsets)| {
+                            bitsets
+                                .iter()
+                                .map(|bitset| (bitset & value_mask).count_ones())
+                                .collect()
+                        })
+                        .collect();
+                    let forward_counts = running_possible_sums(match_counts.iter());
+                    let mut reverse_counts = running_possible_sums(match_counts.iter().rev());
+                    reverse_counts.reverse();
+                    for (i, (block_id, bitsets)) in block_bitsets.iter_mut().enumerate() {
+                        let prior_counts = &forward_counts[i];
+                        let following_counts = &reverse_counts[i + 1];
+                        let other_counts = possible_sums(prior_counts, following_counts);
+                        let mut to_remove = Vec::new();
+                        for (possibility_ix, bitset) in bitsets.iter().enumerate().rev() {
+                            let possibility_count = (bitset & value_mask).count_ones();
+                            if !other_counts.contains(&(self.size as u32 - possibility_count)) {
+                                to_remove.push(possibility_ix);
+                            }
+                        }
+                        if to_remove.is_empty() {
+                            continue;
+                        }
+                        let mut new_possibilities =
+                            self.blocks[*block_id].possibilities.clone();
+                        for j in to_remove {
+                            new_possibilities.remove(j);
+                            bitsets.remove(j);
+                            // TODO: in principle, if we were accumulating prior_counts as we went,
+                            // we could keep prior counts accurate, allowing us to remove more. Too
+                            // complicated to start with though.
+                        }
+                        self.replace_block_possibilities(*block_id, new_possibilities);
+                        made_progress = true;
+                    }
+                }
+            }
         }
         made_progress
     }
@@ -877,6 +968,26 @@ impl GameState {
             .map(|b| f32::log2(b.possibilities.len() as f32))
             .sum()
     }
+}
+
+fn possible_sums(xs: &HashSet<u32>, ys: &HashSet<u32>) -> HashSet<u32> {
+    let mut sums = HashSet::new();
+    for x in xs {
+        for y in ys {
+            sums.insert(x + y);
+        }
+    }
+    sums
+}
+
+fn running_possible_sums<'a>(it: impl Iterator<Item = &'a HashSet<u32>>) -> Vec<HashSet<u32>> {
+    let zero_set: HashSet<u32> = [0].into_iter().collect();
+    let mut out = vec![zero_set];
+    for vals in it {
+        let new_sums = possible_sums(vals, out.last().unwrap());
+        out.push(new_sums);
+    }
+    out
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
