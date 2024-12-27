@@ -890,7 +890,7 @@ impl GameState {
                 // Iterate backwards so indices are valid as we remove
                 for (possibility_ix, bitset) in bitsets.iter().enumerate().rev() {
                     let possibility_count = (bitset & value_mask).count_ones();
-                    if !other_counts.contains(&(self.size as u32 - possibility_count)) {
+                    if !other_counts.contains(&(value_mask.count_ones() - possibility_count)) {
                         to_remove.push(possibility_ix);
                     }
                 }
@@ -1149,6 +1149,8 @@ mod tests {
         dbg!(&gs.blocks[block_id]);
         assert_eq!(gs.blocks[block_id].possibilities.len(), 4);
         assert!(gs.only_in_block_single(true, 5));
-        assert_eq!(gs.blocks[block_id].possibilities.len(), 2);
+        let mut possibilities = gs.blocks[block_id].possibilities.clone();
+        possibilities.sort();
+        assert_eq!(vec![vec![5, 6], vec![6, 5]], possibilities);
     }
 }
