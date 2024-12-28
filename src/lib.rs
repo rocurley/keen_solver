@@ -840,7 +840,6 @@ impl GameState {
     // there's one block that may contain a 3/6, and one block that must, and no other cells may
     // have a 3/6, the block that may contain a 3/6 must contain a 3/6.
     fn only_in_block(&mut self) -> bool {
-        let mut made_progress = false;
         let skip_inelligible = self.skip_inelligible;
         for transposed in [true, false] {
             for y in 0..self.size {
@@ -852,15 +851,15 @@ impl GameState {
                 let was_eligible = *eligibility;
                 *eligibility = false;
                 if self.only_in_block_single(transposed, y) {
-                    made_progress = true;
                     assert!(
                         was_eligible,
                         "Supposedly ineligible only_in_block row made progress",
                     );
+                    return true;
                 }
             }
         }
-        made_progress
+        false
     }
 
     fn only_in_block_single(&mut self, transposed: bool, y: usize) -> bool {
