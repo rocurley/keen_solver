@@ -17,8 +17,9 @@ solver. ExcludeNInN would be a problem if you got really fine grained with it, b
 the row and column level for now should be fine.
  */
 
+mod bitset;
+
 use std::{
-    collections::HashSet,
     fmt::{Debug, Display},
     io::Write,
     iter::zip,
@@ -26,6 +27,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use bitset::{possible_sums, Bitset0};
 pub use game::parse_game_id;
 use game::{Bitmask, BlockInfo, GameState};
 use tabled::{settings::Style, Table, Tabled};
@@ -870,7 +872,7 @@ impl GameState {
             // Matching 3,6 would yield {0,2}.
             // TODO: could we use bitsets instead? Yes, but this is already too
             // complicated. Make a proper bitset type before doing that.
-            let match_counts: Vec<HashSet<u32>> = block_bitsets
+            let match_counts: Vec<Bitset0> = block_bitsets
                 .iter()
                 .map(|(_, bitsets)| {
                     bitsets
@@ -883,8 +885,8 @@ impl GameState {
             let mut reverse_counts = running_possible_sums(match_counts.iter().rev());
             reverse_counts.reverse();
             for (i, (block_id, bitsets)) in block_bitsets.iter_mut().enumerate() {
-                let prior_counts = &forward_counts[i];
-                let following_counts = &reverse_counts[i + 1];
+                let prior_counts = forward_counts[i];
+                let following_counts = reverse_counts[i + 1];
                 let other_counts = possible_sums(prior_counts, following_counts);
                 let mut to_remove = Vec::new();
                 // Iterate backwards so indices are valid as we remove
@@ -982,21 +984,11 @@ impl GameState {
     }
 }
 
-fn possible_sums(xs: &HashSet<u32>, ys: &HashSet<u32>) -> HashSet<u32> {
-    let mut sums = HashSet::new();
-    for x in xs {
-        for y in ys {
-            sums.insert(x + y);
-        }
-    }
-    sums
-}
-
-fn running_possible_sums<'a>(it: impl Iterator<Item = &'a HashSet<u32>>) -> Vec<HashSet<u32>> {
-    let zero_set: HashSet<u32> = [0].into_iter().collect();
+fn running_possible_sums<'a>(it: impl Iterator<Item = &'a Bitset0>) -> Vec<Bitset0> {
+    let zero_set: Bitset0 = [0].into_iter().collect();
     let mut out = vec![zero_set];
     for vals in it {
-        let new_sums = possible_sums(vals, out.last().unwrap());
+        let new_sums = possible_sums(*vals, *out.last().unwrap());
         out.push(new_sums);
     }
     out
