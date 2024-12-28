@@ -214,6 +214,8 @@ pub mod game {
         pub blocks: Vec<BlockInfo>,
         pub rows_exclude_n_in_n_eligible: Vec<bool>,
         pub cols_exclude_n_in_n_eligible: Vec<bool>,
+        pub rows_only_in_block_eligible: Vec<bool>,
+        pub cols_only_in_block_eligible: Vec<bool>,
         pub skip_inelligible: bool,
     }
     impl GameState {
@@ -274,6 +276,12 @@ pub mod game {
             block.must_be_in_block_eligible = true;
             block.compatibility_search_eligible = true;
             block.radial_search_eligible = true;
+            for &ix in &block.cells {
+                let x = ix % self.size;
+                let y = ix / self.size;
+                self.rows_only_in_block_eligible[y] = true;
+                self.cols_only_in_block_eligible[x] = true;
+            }
             for neighbor_id in block.interacting_blocks.clone() {
                 let neighbor = &mut self.blocks[neighbor_id];
                 neighbor.compatibility_search_eligible = true;
@@ -473,6 +481,8 @@ pub mod game {
             cells,
             rows_exclude_n_in_n_eligible: vec![true; size],
             cols_exclude_n_in_n_eligible: vec![true; size],
+            rows_only_in_block_eligible: vec![true; size],
+            cols_only_in_block_eligible: vec![true; size],
             skip_inelligible: true,
         };
         out.initialize_cell_possibilities();
@@ -819,15 +829,35 @@ impl GameState {
         }
         made_progress
     }
+    fn only_in_block_eligilble(&mut self, y: usize, transposed: bool) -> &mut bool {
+        if transposed {
+            &mut self.cols_only_in_block_eligible[y]
+        } else {
+            &mut self.rows_only_in_block_eligible[y]
+        }
+    }
     // Finds subsets of values that must occur within a block. For example, if in a given row
     // there's one block that may contain a 3/6, and one block that must, and no other cells may
     // have a 3/6, the block that may contain a 3/6 must contain a 3/6.
     fn only_in_block(&mut self) -> bool {
         let mut made_progress = false;
+        let skip_inelligible = self.skip_inelligible;
         for transposed in [true, false] {
             for y in 0..self.size {
                 // TODO: eligibility tracking
-                made_progress |= self.only_in_block_single(transposed, y);
+                let eligibility = self.only_in_block_eligilble(y, transposed);
+                if !*eligibility && skip_inelligible {
+                    continue;
+                }
+                let was_eligible = *eligibility;
+                *eligibility = false;
+                if self.only_in_block_single(transposed, y) {
+                    made_progress = true;
+                    assert!(
+                        was_eligible,
+                        "Supposedly ineligible only_in_block row made progress",
+                    );
+                }
             }
         }
         made_progress
