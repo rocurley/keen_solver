@@ -986,7 +986,9 @@ impl GameState {
 
 fn running_possible_sums<'a>(it: impl Iterator<Item = &'a Bitset0>) -> Vec<Bitset0> {
     let zero_set: Bitset0 = [0].into_iter().collect();
-    let mut out = vec![zero_set];
+    let (len, _) = it.size_hint();
+    let mut out = Vec::with_capacity(len + 1);
+    out.push(zero_set);
     for vals in it {
         let new_sums = possible_sums(*vals, *out.last().unwrap());
         out.push(new_sums);
