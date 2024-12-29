@@ -899,8 +899,6 @@ impl GameState {
             // acheivable across the different possibilities. For example, when matching
             // 2,4,6 against possibilities [(1,2),(2,4),(3,6)] the result will be {1,2}.
             // Matching 3,6 would yield {0,2}.
-            // TODO: could we use bitsets instead? Yes, but this is already too
-            // complicated. Make a proper bitset type before doing that.
             let match_counts: Vec<BitMultiset> = block_bitsets
                 .iter()
                 .map(|(_, bitsets)| {
@@ -911,8 +909,10 @@ impl GameState {
                 })
                 .collect();
             let total_counts = possible_sums_iter(match_counts.iter().copied());
-            for (i, (block_id, bitsets)) in block_bitsets.iter_mut().enumerate() {
-                let other_counts = undo_possible_sums(total_counts, match_counts[i]);
+            for (this_counts, (block_id, bitsets)) in
+                zip(match_counts, block_bitsets.iter_mut())
+            {
+                let other_counts = undo_possible_sums(total_counts, this_counts);
                 let mut to_remove = Vec::new();
                 // Iterate backwards so indices are valid as we remove
                 for (possibility_ix, bitset) in bitsets.iter().enumerate().rev() {
@@ -930,9 +930,10 @@ impl GameState {
                 for j in to_remove {
                     new_possibilities.remove(j);
                     bitsets.remove(j);
-                    // TODO: in principle, if we were accumulating prior_counts as we went,
-                    // we could keep prior counts accurate, allowing us to remove more. Too
-                    // complicated to start with though.
+                    // It seems at first that it would be helpful to remove this possibility from
+                    // this_counts, then update total_counts. But that's actually pointless, since
+                    // this possibility cannot participate in a valid row. Given that, it can't
+                    // help validate another block's possibility (for this value mask, anyway).
                 }
                 self.replace_block_possibilities(*block_id, new_possibilities);
                 made_progress = true;
