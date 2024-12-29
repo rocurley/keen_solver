@@ -27,7 +27,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use bitset::{possible_sums, Bitset0};
+use bitset::{possible_sums, BitMultiset};
 pub use game::parse_game_id;
 use game::{Bitmask, BlockInfo, GameState};
 use tabled::{settings::Style, Table, Tabled};
@@ -901,12 +901,12 @@ impl GameState {
             // Matching 3,6 would yield {0,2}.
             // TODO: could we use bitsets instead? Yes, but this is already too
             // complicated. Make a proper bitset type before doing that.
-            let match_counts: Vec<Bitset0> = block_bitsets
+            let match_counts: Vec<BitMultiset> = block_bitsets
                 .iter()
                 .map(|(_, bitsets)| {
                     bitsets
                         .iter()
-                        .map(|bitset| (bitset & value_mask).count_ones())
+                        .map(|bitset| (bitset & value_mask).count_ones() as Bitmask)
                         .collect()
                 })
                 .collect();
@@ -921,7 +921,9 @@ impl GameState {
                 // Iterate backwards so indices are valid as we remove
                 for (possibility_ix, bitset) in bitsets.iter().enumerate().rev() {
                     let possibility_count = (bitset & value_mask).count_ones();
-                    if !other_counts.contains(&(value_mask.count_ones() - possibility_count)) {
+                    if !other_counts
+                        .contains((value_mask.count_ones() - possibility_count) as Bitmask)
+                    {
                         to_remove.push(possibility_ix);
                     }
                 }
@@ -1013,8 +1015,8 @@ impl GameState {
     }
 }
 
-fn running_possible_sums<'a>(it: impl Iterator<Item = &'a Bitset0>) -> Vec<Bitset0> {
-    let zero_set: Bitset0 = [0].into_iter().collect();
+fn running_possible_sums<'a>(it: impl Iterator<Item = &'a BitMultiset>) -> Vec<BitMultiset> {
+    let zero_set: BitMultiset = [0].into_iter().collect();
     let (len, _) = it.size_hint();
     let mut out = Vec::with_capacity(len + 1);
     out.push(zero_set);
