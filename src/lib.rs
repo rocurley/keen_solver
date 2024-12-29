@@ -894,7 +894,9 @@ impl GameState {
             })
             .collect();
         let mut made_progress = false;
-        for value_mask in 1..1 << self.size {
+        // A value mask has the same effect as its negation: counting even numbers is the same as
+        // counting odd ones. This lets us stop halfway through the space.
+        for value_mask in 1..=1 << (self.size - 1) {
             // For every relevant block, match_counts stores the number of matches
             // acheivable across the different possibilities. For example, when matching
             // 2,4,6 against possibilities [(1,2),(2,4),(3,6)] the result will be {1,2}.
