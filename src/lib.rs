@@ -30,7 +30,10 @@ use std::{
 use bitset::{possible_sums_iter, undo_possible_sums, BitMultiset};
 pub use game::parse_game_id;
 use game::{Bitmask, BlockInfo, GameState};
-use tabled::{settings::Style, Table, Tabled};
+use tabled::{
+    settings::{themes::ColumnNames, Style},
+    Table, Tabled,
+};
 
 fn iterate_possibilities(size: usize, possiblities: Bitmask) -> impl Iterator<Item = usize> {
     (0..size)
@@ -1118,7 +1121,13 @@ impl SolversStats {
             RadialSearchPromising,
             RadialSearch,
         ];
-        let table_data = solvers.into_iter().map(|solver| (solver, &self[solver]));
+        let table_data = solvers.into_iter().map(|solver| {
+            (
+                solver,
+                &self[solver],
+                self[solver].entropy_removed / self[solver].duration.as_secs_f32() / 1000.0,
+            )
+        });
 
         let mut tab = Table::new(table_data);
         tab.with(Style::sharp());
