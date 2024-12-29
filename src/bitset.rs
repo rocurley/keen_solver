@@ -1,7 +1,6 @@
 use crate::game::Bitmask;
 
-// Values start at 0
-#[derive(Clone, Copy, Eq, PartialEq)]
+#[derive(Clone, Copy, Eq, PartialEq, Debug)]
 // TODO: check this against Bitmask
 pub struct BitMultiset(u32);
 
@@ -43,6 +42,13 @@ impl FromIterator<Bitmask> for BitMultiset {
 
 pub fn possible_sums(xs: BitMultiset, ys: BitMultiset) -> BitMultiset {
     BitMultiset(xs.0 * ys.0)
+}
+
+pub fn possible_sums_iter(it: impl IntoIterator<Item = BitMultiset>) -> BitMultiset {
+    BitMultiset(it.into_iter().map(|set| set.0).product())
+}
+pub fn undo_possible_sums(xs: BitMultiset, ys: BitMultiset) -> BitMultiset {
+    BitMultiset(xs.0 / ys.0)
 }
 
 #[cfg(test)]

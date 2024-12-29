@@ -27,7 +27,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use bitset::{possible_sums, BitMultiset};
+use bitset::{possible_sums_iter, undo_possible_sums, BitMultiset};
 pub use game::parse_game_id;
 use game::{Bitmask, BlockInfo, GameState};
 use tabled::{settings::Style, Table, Tabled};
@@ -910,13 +910,9 @@ impl GameState {
                         .collect()
                 })
                 .collect();
-            let forward_counts = running_possible_sums(match_counts.iter());
-            let mut reverse_counts = running_possible_sums(match_counts.iter().rev());
-            reverse_counts.reverse();
+            let total_counts = possible_sums_iter(match_counts.iter().copied());
             for (i, (block_id, bitsets)) in block_bitsets.iter_mut().enumerate() {
-                let prior_counts = forward_counts[i];
-                let following_counts = reverse_counts[i + 1];
-                let other_counts = possible_sums(prior_counts, following_counts);
+                let other_counts = undo_possible_sums(total_counts, match_counts[i]);
                 let mut to_remove = Vec::new();
                 // Iterate backwards so indices are valid as we remove
                 for (possibility_ix, bitset) in bitsets.iter().enumerate().rev() {
@@ -1013,18 +1009,6 @@ impl GameState {
             .map(|b| f32::log2(b.possibilities.len() as f32))
             .sum()
     }
-}
-
-fn running_possible_sums<'a>(it: impl Iterator<Item = &'a BitMultiset>) -> Vec<BitMultiset> {
-    let zero_set: BitMultiset = [0].into_iter().collect();
-    let (len, _) = it.size_hint();
-    let mut out = Vec::with_capacity(len + 1);
-    out.push(zero_set);
-    for vals in it {
-        let new_sums = possible_sums(*vals, *out.last().unwrap());
-        out.push(new_sums);
-    }
-    out
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
