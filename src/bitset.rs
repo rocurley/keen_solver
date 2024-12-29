@@ -40,6 +40,7 @@ impl FromIterator<Bitmask> for BitMultiset {
     }
 }
 
+#[cfg(test)]
 pub fn possible_sums(xs: BitMultiset, ys: BitMultiset) -> BitMultiset {
     BitMultiset(xs.0 * ys.0)
 }

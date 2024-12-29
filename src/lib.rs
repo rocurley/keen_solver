@@ -30,10 +30,7 @@ use std::{
 use bitset::{possible_sums_iter, undo_possible_sums, BitMultiset};
 pub use game::parse_game_id;
 use game::{Bitmask, BlockInfo, GameState};
-use tabled::{
-    settings::{themes::ColumnNames, Style},
-    Table, Tabled,
-};
+use tabled::{settings::Style, Table, Tabled};
 
 fn iterate_possibilities(size: usize, possiblities: Bitmask) -> impl Iterator<Item = usize> {
     (0..size)
@@ -889,7 +886,7 @@ impl GameState {
                     .map(|possibility| {
                         zip(possibility, &block.cells)
                             .filter(|(_, ix)| in_row(ix))
-                            .map(|(value, _)| (1 << value - 1))
+                            .map(|(value, _)| (1 << (value - 1)))
                             .fold(0, Bitmask::bitor)
                     })
                     .collect();
