@@ -1,3 +1,5 @@
+#![feature(portable_simd)]
+
 mod bitset;
 
 use std::{
@@ -6,6 +8,7 @@ use std::{
     io::Write,
     iter::zip,
     ops::{BitOr, Index, IndexMut},
+    simd::{cmp::SimdPartialEq, Simd},
     time::{Duration, Instant},
 };
 
@@ -21,7 +24,7 @@ fn iterate_possibilities(size: usize, possiblities: Bitmask) -> impl Iterator<It
 }
 
 pub mod game {
-    use std::{collections::HashMap, fmt::Debug};
+    use std::{collections::HashMap, fmt::Debug, simd::Simd};
 
     use pest::Parser;
     use pest_derive::Parser;
@@ -195,7 +198,7 @@ pub mod game {
     pub struct RowCopy {
         y: usize,
         transposed: bool,
-        pub possibilities: Vec<Bitmask>,
+        pub possibilities: Simd<Bitmask, 8>,
     }
 
     pub fn index(size: usize, x: usize, y: usize, transposed: bool) -> usize {
@@ -223,12 +226,14 @@ pub mod game {
             true
         }
         pub fn get_row(&self, y: usize, transposed: bool) -> RowCopy {
-            let possibilities: Vec<_> = (0..self.size)
+            // TODO: use gather_or_default
+            let possibilities_vec: Vec<_> = (0..self.size)
                 .map(|x| {
                     let ix = index(self.size, x, y, transposed);
                     self.cells[ix].possibilities
                 })
                 .collect();
+            let possibilities = Simd::load_or_default(&possibilities_vec);
             RowCopy {
                 y,
                 transposed,
@@ -594,17 +599,19 @@ impl GameState {
         made_progress
     }
 
+    const ZERO: Simd<Bitmask, 8> = Simd::<Bitmask, 8>::from_array([0; 8]);
+
     fn exclude_n_in_n_single_dual(&mut self, transposed: bool, y: usize) -> bool {
         let mut row = self.get_row(y, transposed);
         for value_mask in 1..1 << self.size {
-            let mut matching_cells: Bitmask = 0;
-            for (x, &cell) in row.possibilities.iter().enumerate() {
-                let is_match = cell & value_mask > 0;
-                if is_match {
-                    matching_cells |= 1 << x;
-                }
-            }
-            match matching_cells.count_ones().cmp(&value_mask.count_ones()) {
+            let vec_mask = Simd::<Bitmask, 8>::splat(value_mask);
+            let matches = vec_mask & row.possibilities;
+            let match_mask = matches.simd_ne(Self::ZERO);
+            match match_mask
+                .to_bitmask()
+                .count_ones()
+                .cmp(&value_mask.count_ones())
+            {
                 Ordering::Less => {
                     self.print_save();
                     dbg!(transposed, y);
@@ -612,11 +619,7 @@ impl GameState {
                     panic!("fewer cells than values");
                 }
                 Ordering::Equal => {
-                    for (x, cell) in row.possibilities.iter_mut().enumerate() {
-                        if (1 << x) & matching_cells > 0 {
-                            *cell &= value_mask;
-                        }
-                    }
+                    row.possibilities = match_mask.select(matches, row.possibilities);
                 }
                 Ordering::Greater => {}
             }
