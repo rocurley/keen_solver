@@ -498,6 +498,15 @@ impl GameState {
             &mut self.rows_exclude_n_in_n_eligible[y]
         }
     }
+    // It seems like there's a dual thing here. Currently, we:
+    // * Pick out subsets of cells
+    // * If there are n possibilities in n cells, those possibilities can be eliminated elsewhere.
+    // Instead, we could:
+    // * Pick out a subset of values
+    // * If there are n values that only appear in n cells, then those cells can eliminate all
+    // other possibilties
+    // But these might be the same. If there are n cells with n possibilities, then the (s-n) other
+    // cells will be the only place where the (s-n) other values occur.
     fn exclude_n_in_n(&mut self) -> bool {
         let mut made_progress = false;
         let skip_inelligible = self.skip_inelligible;
@@ -509,45 +518,49 @@ impl GameState {
                     continue;
                 }
                 *eligibility = false;
-                for cell_mask in 1..1 << self.size {
-                    // Union of possibilities in the cells of cell_mask
-                    let mut seen = 0;
-                    for x in 0..self.size {
-                        if (1 << x) & cell_mask > 0 {
-                            let ix = index(self.size, x, y, transposed);
-                            seen |= self.cells[ix].possibilities;
-                        }
-                    }
-                    use std::cmp::Ordering;
-                    match Bitmask::count_ones(seen).cmp(&Bitmask::count_ones(cell_mask)) {
-                        Ordering::Less => {
-                            self.print_save();
-                            dbg!(transposed, y);
-                            eprintln!("mask: {:#06b}", cell_mask);
-                            panic!("fewer possibilities than cells");
-                        }
-                        Ordering::Equal => {
-                            for x in 0..self.size {
-                                let ix = index(self.size, x, y, transposed);
-                                if (1 << x) & cell_mask == 0 {
-                                    let cell_changed = self.mask_cell_possibilities(ix, !seen);
-                                    if cell_changed {
-                                        if !was_eligible {
-                                            self.print_save();
-                                            dbg!(transposed, y);
-                                            eprintln!("mask: {:b}", cell_mask);
-                                            panic!(
-                                                "Supposedly ineligbile row/col made progress."
-                                            );
-                                        }
-                                        made_progress = true;
-                                    }
-                                }
-                            }
-                        }
-                        Ordering::Greater => {}
+                // Can we SIMD this? Improve the cache locality? Something algorithmic to make it
+                // faster? AOS -> SOA for cells?
+                if self.exclude_n_in_n_single(transposed, y) {
+                    made_progress = true;
+                    if !was_eligible {
+                        self.print_save();
+                        dbg!(transposed, y);
+                        panic!("Supposedly ineligbile row/col made progress.");
                     }
                 }
+            }
+        }
+        made_progress
+    }
+
+    fn exclude_n_in_n_single(&mut self, transposed: bool, y: usize) -> bool {
+        let mut made_progress = false;
+        for cell_mask in 1..1 << self.size {
+            // Union of possibilities in the cells of cell_mask
+            let mut seen = 0;
+            for x in 0..self.size {
+                if (1 << x) & cell_mask > 0 {
+                    let ix = index(self.size, x, y, transposed);
+                    seen |= self.cells[ix].possibilities;
+                }
+            }
+            use std::cmp::Ordering;
+            match Bitmask::count_ones(seen).cmp(&Bitmask::count_ones(cell_mask)) {
+                Ordering::Less => {
+                    self.print_save();
+                    dbg!(transposed, y);
+                    eprintln!("mask: {:#06b}", cell_mask);
+                    panic!("fewer possibilities than cells");
+                }
+                Ordering::Equal => {
+                    for x in 0..self.size {
+                        let ix = index(self.size, x, y, transposed);
+                        if (1 << x) & cell_mask == 0 {
+                            made_progress |= self.mask_cell_possibilities(ix, !seen);
+                        }
+                    }
+                }
+                Ordering::Greater => {}
             }
         }
         made_progress
