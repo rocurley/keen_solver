@@ -1,6 +1,7 @@
 mod bitset;
 
 use std::{
+    cmp::Ordering,
     fmt::{Debug, Display},
     io::Write,
     iter::zip,
@@ -520,7 +521,7 @@ impl GameState {
                 *eligibility = false;
                 // Can we SIMD this? Improve the cache locality? Something algorithmic to make it
                 // faster? AOS -> SOA for cells?
-                if self.exclude_n_in_n_single(transposed, y) {
+                if self.exclude_n_in_n_single_dual(transposed, y) {
                     made_progress = true;
                     if !was_eligible {
                         self.print_save();
@@ -544,7 +545,6 @@ impl GameState {
                     seen |= self.cells[ix].possibilities;
                 }
             }
-            use std::cmp::Ordering;
             match Bitmask::count_ones(seen).cmp(&Bitmask::count_ones(cell_mask)) {
                 Ordering::Less => {
                     self.print_save();
@@ -565,6 +565,39 @@ impl GameState {
         }
         made_progress
     }
+
+    fn exclude_n_in_n_single_dual(&mut self, transposed: bool, y: usize) -> bool {
+        let mut made_progress = false;
+        for value_mask in 1..1 << self.size {
+            let mut matching_cells: Bitmask = 0;
+            for x in 0..self.size {
+                let ix = index(self.size, x, y, transposed);
+                let is_match = self.cells[ix].possibilities & value_mask > 0;
+                if is_match {
+                    matching_cells |= 1 << x;
+                }
+            }
+            match matching_cells.count_ones().cmp(&value_mask.count_ones()) {
+                Ordering::Less => {
+                    self.print_save();
+                    dbg!(transposed, y);
+                    eprintln!("mask: {:#06b}", value_mask);
+                    panic!("fewer cells than values");
+                }
+                Ordering::Equal => {
+                    for x in 0..self.size {
+                        if (1 << x) & matching_cells > 0 {
+                            let ix = index(self.size, x, y, transposed);
+                            made_progress |= self.mask_cell_possibilities(ix, value_mask);
+                        }
+                    }
+                }
+                Ordering::Greater => {}
+            }
+        }
+        made_progress
+    }
+
     pub fn write_save(&self, mut out: impl Write) {
         let mut write = |key, value: &str| {
             writeln!(out, "{}:{}:{}", key, value.len(), value).unwrap();
