@@ -8,7 +8,7 @@ use std::{
     io::Write,
     iter::zip,
     ops::{BitOr, Index, IndexMut},
-    simd::{cmp::SimdPartialEq, Simd},
+    simd::{cmp::SimdPartialEq, num::SimdUint, Mask, Simd},
     time::{Duration, Instant},
 };
 
@@ -568,17 +568,13 @@ impl GameState {
     }
 
     fn exclude_n_in_n_single(&mut self, transposed: bool, y: usize) -> bool {
-        let mut made_progress = false;
+        let mut row = self.get_row(y, transposed);
         for cell_mask in 1..1 << self.size {
-            // Union of possibilities in the cells of cell_mask
-            let mut seen = 0;
-            for x in 0..self.size {
-                if (1 << x) & cell_mask > 0 {
-                    let ix = index(self.size, x, y, transposed);
-                    seen |= self.cells[ix].possibilities;
-                }
-            }
-            match Bitmask::count_ones(seen).cmp(&Bitmask::count_ones(cell_mask)) {
+            let cell_mask_vec = Mask::from_bitmask(cell_mask);
+            let masked = cell_mask_vec.select(row.possibilities, Self::ZERO);
+            let seen = masked.reduce_or();
+            let unseen_vec = Simd::splat(!seen);
+            match Bitmask::count_ones(seen).cmp(&cell_mask.count_ones()) {
                 Ordering::Less => {
                     self.print_save();
                     dbg!(transposed, y);
@@ -586,17 +582,13 @@ impl GameState {
                     panic!("fewer possibilities than cells");
                 }
                 Ordering::Equal => {
-                    for x in 0..self.size {
-                        let ix = index(self.size, x, y, transposed);
-                        if (1 << x) & cell_mask == 0 {
-                            made_progress |= self.mask_cell_possibilities(ix, !seen);
-                        }
-                    }
+                    row.possibilities =
+                        cell_mask_vec.select(row.possibilities, row.possibilities & unseen_vec);
                 }
                 Ordering::Greater => {}
             }
         }
-        made_progress
+        self.update_row(row)
     }
 
     const ZERO: Simd<Bitmask, 8> = Simd::<Bitmask, 8>::from_array([0; 8]);
