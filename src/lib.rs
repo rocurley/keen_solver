@@ -11,21 +11,13 @@ use std::{
 
 use bitset::{possible_sums_iter, undo_possible_sums, BitMultiset};
 pub use game::parse_game_id;
-use game::{Bitmask, BlockInfo, GameState};
+use game::{index, Bitmask, BlockInfo, GameState};
 use tabled::{settings::Style, Table, Tabled};
 
 fn iterate_possibilities(size: usize, possiblities: Bitmask) -> impl Iterator<Item = usize> {
     (0..size)
         .filter(move |i| possiblities & (1 << i) > 0)
         .map(|i| i + 1)
-}
-
-fn index(size: usize, x: usize, y: usize, transposed: bool) -> usize {
-    if transposed {
-        x * size + y
-    } else {
-        y * size + x
-    }
 }
 
 pub mod game {
@@ -200,6 +192,20 @@ pub mod game {
         pub cols_only_in_block_eligible: Vec<bool>,
         pub skip_inelligible: bool,
     }
+    pub struct RowCopy {
+        y: usize,
+        transposed: bool,
+        pub possibilities: Vec<Bitmask>,
+    }
+
+    pub fn index(size: usize, x: usize, y: usize, transposed: bool) -> usize {
+        if transposed {
+            x * size + y
+        } else {
+            y * size + x
+        }
+    }
+
     impl GameState {
         pub fn mask_cell_possibilities(&mut self, cell_id: usize, mask: Bitmask) -> bool {
             let original = self.cells[cell_id].possibilities;
@@ -215,6 +221,28 @@ pub mod game {
             });
             self.apply_block_possibilities_to_cells(block_id);
             true
+        }
+        pub fn get_row(&self, y: usize, transposed: bool) -> RowCopy {
+            let possibilities: Vec<_> = (0..self.size)
+                .map(|x| {
+                    let ix = index(self.size, x, y, transposed);
+                    self.cells[ix].possibilities
+                })
+                .collect();
+            RowCopy {
+                y,
+                transposed,
+                possibilities,
+            }
+        }
+        // TODO: we update blocks multiple times, which doesn't seem efficient.
+        pub fn update_row(&mut self, row: RowCopy) -> bool {
+            let mut changed = false;
+            for x in 0..self.size {
+                let ix = index(self.size, x, row.y, row.transposed);
+                changed |= self.mask_cell_possibilities(ix, row.possibilities[x]);
+            }
+            changed
         }
         // NOTE: will incorrectly refresh eligibility if the order is different.
         pub fn replace_block_possibilities(
@@ -567,12 +595,11 @@ impl GameState {
     }
 
     fn exclude_n_in_n_single_dual(&mut self, transposed: bool, y: usize) -> bool {
-        let mut made_progress = false;
+        let mut row = self.get_row(y, transposed);
         for value_mask in 1..1 << self.size {
             let mut matching_cells: Bitmask = 0;
-            for x in 0..self.size {
-                let ix = index(self.size, x, y, transposed);
-                let is_match = self.cells[ix].possibilities & value_mask > 0;
+            for (x, &cell) in row.possibilities.iter().enumerate() {
+                let is_match = cell & value_mask > 0;
                 if is_match {
                     matching_cells |= 1 << x;
                 }
@@ -585,17 +612,16 @@ impl GameState {
                     panic!("fewer cells than values");
                 }
                 Ordering::Equal => {
-                    for x in 0..self.size {
+                    for (x, cell) in row.possibilities.iter_mut().enumerate() {
                         if (1 << x) & matching_cells > 0 {
-                            let ix = index(self.size, x, y, transposed);
-                            made_progress |= self.mask_cell_possibilities(ix, value_mask);
+                            *cell &= value_mask;
                         }
                     }
                 }
                 Ordering::Greater => {}
             }
         }
-        made_progress
+        self.update_row(row)
     }
 
     pub fn write_save(&self, mut out: impl Write) {
