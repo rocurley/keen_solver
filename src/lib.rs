@@ -24,7 +24,7 @@ fn iterate_possibilities(size: usize, possiblities: Bitmask) -> impl Iterator<It
 }
 
 pub mod game {
-    use std::{collections::HashMap, fmt::Debug, iter::zip, simd::Simd};
+    use std::{collections::HashMap, fmt::Debug, iter::zip, simd::Simd, usize};
 
     use pest::Parser;
     use pest_derive::Parser;
@@ -194,6 +194,7 @@ pub mod game {
         pub rows_only_in_block_eligible: Vec<bool>,
         pub cols_only_in_block_eligible: Vec<bool>,
         pub skip_inelligible: bool,
+        col_idx: Simd<usize, 8>,
     }
     pub struct RowCopy {
         y: usize,
@@ -226,14 +227,13 @@ pub mod game {
             true
         }
         pub fn get_row(&self, y: usize, transposed: bool) -> RowCopy {
-            // TODO: use gather_or_default
-            let possibilities_vec: Vec<_> = (0..self.size)
-                .map(|x| {
-                    let ix = index(self.size, x, y, transposed);
-                    self.cells.possibilities[ix]
-                })
-                .collect();
-            let possibilities = Simd::load_or_default(&possibilities_vec);
+            let possibilities = if transposed {
+                Simd::gather_or_default(&self.cells.possibilities[y..], self.col_idx)
+            } else {
+                Simd::load_or_default(
+                    &self.cells.possibilities[self.size * y..self.size * (y + 1)],
+                )
+            };
             RowCopy {
                 y,
                 transposed,
@@ -510,6 +510,8 @@ pub mod game {
         for block in blocks.iter_mut() {
             block.fill_in_possibilities(size);
         }
+        let col_index_vec: Vec<_> = (0..size).map(|x| x * size).collect();
+        let col_idx = Simd::load_or(&col_index_vec, Simd::splat(usize::MAX));
         let mut out = GameState {
             desc,
             size,
@@ -520,6 +522,7 @@ pub mod game {
             rows_only_in_block_eligible: vec![true; size],
             cols_only_in_block_eligible: vec![true; size],
             skip_inelligible: true,
+            col_idx,
         };
         out.initialize_cell_possibilities();
         out
