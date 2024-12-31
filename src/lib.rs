@@ -14,7 +14,7 @@ use std::{
 
 use bitset::{possible_sums_iter, undo_possible_sums, BitMultiset};
 pub use game::parse_game_id;
-use game::{index, Bitmask, BlockInfo, GameState};
+use game::{Bitmask, BlockInfo, GameState};
 use tabled::{settings::Style, Table, Tabled};
 
 fn iterate_possibilities(size: usize, possiblities: Bitmask) -> impl Iterator<Item = usize> {
@@ -24,7 +24,7 @@ fn iterate_possibilities(size: usize, possiblities: Bitmask) -> impl Iterator<It
 }
 
 pub mod game {
-    use std::{collections::HashMap, fmt::Debug, simd::Simd};
+    use std::{collections::HashMap, fmt::Debug, iter::zip, simd::Simd};
 
     use pest::Parser;
     use pest_derive::Parser;
@@ -58,10 +58,10 @@ pub mod game {
     pub type Bitmask = u8;
 
     #[readonly::make]
-    #[derive(Debug, PartialEq, Eq, Clone, Copy)]
+    #[derive(Debug, PartialEq, Eq, Clone)]
     pub struct CellInfo {
-        pub block_id: usize,
-        pub possibilities: Bitmask,
+        pub block_id: Vec<usize>,
+        pub possibilities: Vec<Bitmask>,
     }
 
     #[readonly::make]
@@ -187,7 +187,7 @@ pub mod game {
     pub struct GameState {
         pub desc: String,
         pub size: usize,
-        pub cells: Vec<CellInfo>,
+        pub cells: CellInfo,
         pub blocks: Vec<BlockInfo>,
         pub rows_exclude_n_in_n_eligible: Vec<bool>,
         pub cols_exclude_n_in_n_eligible: Vec<bool>,
@@ -211,12 +211,12 @@ pub mod game {
 
     impl GameState {
         pub fn mask_cell_possibilities(&mut self, cell_id: usize, mask: Bitmask) -> bool {
-            let original = self.cells[cell_id].possibilities;
+            let original = self.cells.possibilities[cell_id];
             if original == original & mask {
                 return false;
             }
             // Filter block possibilities by the new cell possibilities
-            let block_id = self.cells[cell_id].block_id;
+            let block_id = self.cells.block_id[cell_id];
             let block = &mut self.blocks[block_id];
             let cell_ix_in_block = block.cells.iter().position(|&ix| ix == cell_id).unwrap();
             block.possibilities.retain(|block_possibility| {
@@ -230,7 +230,7 @@ pub mod game {
             let possibilities_vec: Vec<_> = (0..self.size)
                 .map(|x| {
                     let ix = index(self.size, x, y, transposed);
-                    self.cells[ix].possibilities
+                    self.cells.possibilities[ix]
                 })
                 .collect();
             let possibilities = Simd::load_or_default(&possibilities_vec);
@@ -293,7 +293,7 @@ pub mod game {
             }
             // Update cells and cell-level elgigibility
             for (new_cell_value, &ix) in new_cell_values.into_iter().zip(&block.cells) {
-                let cell_value = &mut self.cells[ix].possibilities;
+                let cell_value = &mut self.cells.possibilities[ix];
                 if *cell_value == new_cell_value {
                     continue;
                 }
@@ -336,8 +336,10 @@ pub mod game {
                     mask
                 })
                 .collect();
-            for cell in self.cells.iter_mut() {
-                cell.possibilities &= block_possibilities[cell.block_id];
+            for (possibilities, &block_id) in
+                zip(&mut self.cells.possibilities, &self.cells.block_id)
+            {
+                *possibilities &= block_possibilities[block_id];
             }
         }
         pub fn from_save(r: impl std::io::BufRead) -> Self {
@@ -376,8 +378,8 @@ pub mod game {
             println!("{}", scratch);
         }
         pub fn consistency_check(&self) {
-            for (i, cell) in self.cells.iter().enumerate() {
-                if cell.possibilities == 0 {
+            for (i, &possibilities) in self.cells.possibilities.iter().enumerate() {
+                if possibilities == 0 {
                     self.print_save();
                     panic!(
                         "Cell with no possibilities at {}, {}",
@@ -474,7 +476,7 @@ pub mod game {
 
         let mut seen = HashMap::new();
         let mut next_block_id = 0;
-        let cells: Vec<CellInfo> = (0..size * size)
+        let block_id: Vec<_> = (0..size * size)
             .map(|i| {
                 let block_id = *seen.entry(blocks_uf.find(i)).or_insert_with(|| {
                     let block_id = next_block_id;
@@ -482,24 +484,24 @@ pub mod game {
                     block_id
                 });
                 blocks[block_id].cells.push(i);
-                CellInfo {
-                    possibilities: ((2 << size) - 1),
-                    block_id,
-                }
+                block_id
             })
             .collect();
-        for (i, cell) in cells.iter().enumerate() {
-            let block_id = cell.block_id;
+        let cells = CellInfo {
+            block_id,
+            possibilities: vec![(2 << size) - 1; size * size],
+        };
+        for (i, &block_id) in cells.block_id.iter().enumerate() {
             let x = i % size;
             let y = i / size;
             for x2 in 0..size {
-                let other_block_id = cells[x2 + y * size].block_id;
+                let other_block_id = cells.block_id[x2 + y * size];
                 if other_block_id != block_id {
                     blocks[block_id].add_interacting(other_block_id);
                 }
             }
             for y2 in 0..size {
-                let other_block_id = cells[x + y2 * size].block_id;
+                let other_block_id = cells.block_id[x + y2 * size];
                 if other_block_id != block_id {
                     blocks[block_id].add_interacting(other_block_id);
                 }
@@ -552,8 +554,6 @@ impl GameState {
                     continue;
                 }
                 *eligibility = false;
-                // Can we SIMD this? Improve the cache locality? Something algorithmic to make it
-                // faster? AOS -> SOA for cells?
                 if self.exclude_n_in_n_single_dual(transposed, y) {
                     made_progress = true;
                     if !was_eligible {
@@ -625,19 +625,21 @@ impl GameState {
         };
         let pencil_moves: Vec<_> = self
             .cells
+            .possibilities
             .iter()
             .enumerate()
-            .flat_map(|(i, cell)| {
-                iterate_possibilities(self.size, cell.possibilities).map(move |x| (i, x))
+            .flat_map(|(i, &possibilities)| {
+                iterate_possibilities(self.size, possibilities).map(move |x| (i, x))
             })
             .collect();
         let definite_moves: Vec<_> = self
             .cells
+            .possibilities
             .iter()
             .enumerate()
-            .filter(|(_, cell)| Bitmask::is_power_of_two(cell.possibilities))
-            .flat_map(|(i, cell)| {
-                iterate_possibilities(self.size, cell.possibilities).map(move |x| (i, x))
+            .filter(|(_, &possibilities)| Bitmask::is_power_of_two(possibilities))
+            .flat_map(|(i, &possibilities)| {
+                iterate_possibilities(self.size, possibilities).map(move |x| (i, x))
             })
             .collect();
 
@@ -666,8 +668,9 @@ impl GameState {
     }
     pub fn solved(&self) -> bool {
         self.cells
+            .possibilities
             .iter()
-            .all(|cell| Bitmask::is_power_of_two(cell.possibilities))
+            .all(|&possibilties| Bitmask::is_power_of_two(possibilties))
     }
     pub fn compatibility_search(&mut self) -> bool {
         let mut made_progress = false;
@@ -880,8 +883,8 @@ impl GameState {
                     *m1 &= m2;
                 }
             }
-            for i in 0..self.cells.len() {
-                if self.cells[i].block_id == block_id {
+            for i in 0..self.cells.block_id.len() {
+                if self.cells.block_id[i] == block_id {
                     continue;
                 }
                 let mask = !row_required[i / self.size] & !col_required[i % self.size];
@@ -1240,7 +1243,7 @@ mod tests {
     fn test_only_in_block() {
         let save = std::fs::read("test_data/single_5_possibility").unwrap();
         let mut gs = GameState::from_save(save.as_slice());
-        let block_id = gs.cells[5].block_id;
+        let block_id = gs.cells.block_id[5];
         dbg!(&gs.blocks[block_id]);
         assert_eq!(gs.blocks[block_id].possibilities.len(), 4);
         assert!(gs.only_in_block_single(true, 5));
