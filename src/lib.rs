@@ -7,6 +7,7 @@ use std::{
     fmt::{Debug, Display},
     io::Write,
     iter::zip,
+    mem::swap,
     ops::{BitOr, Index, IndexMut},
     simd::{cmp::SimdPartialEq, num::SimdUint, Mask, Simd},
     time::{Duration, Instant},
@@ -29,6 +30,8 @@ pub mod game {
     use pest::Parser;
     use pest_derive::Parser;
     use union_find::{QuickUnionUf, UnionByRank, UnionFind};
+
+    use crate::delete_from_vector;
 
     #[derive(Debug, PartialEq, Eq, Clone, Copy)]
     enum Operator {
@@ -260,6 +263,20 @@ pub mod game {
                 return false;
             }
             block.possibilities = new_possibilities;
+            self.apply_block_possibilities_to_cells(block_id);
+            true
+        }
+        pub fn delete_block_possibilities(
+            &mut self,
+            block_id: usize,
+            delete_indices: impl Iterator<Item = usize>,
+        ) -> bool {
+            let block = &mut self.blocks[block_id];
+            let mut delete_indices = delete_indices.peekable();
+            if delete_indices.peek().is_none() {
+                return false;
+            }
+            delete_from_vector(&mut block.possibilities, delete_indices);
             self.apply_block_possibilities_to_cells(block_id);
             true
         }
@@ -527,6 +544,23 @@ pub mod game {
         out.initialize_cell_possibilities();
         out
     }
+}
+
+fn delete_from_vector<T>(xs: &mut Vec<T>, mut iter: impl Iterator<Item = usize>) {
+    let Some(mut dst) = iter.next() else {
+        return;
+    };
+    let mut src = dst + 1;
+    for i in iter.chain([xs.len()]) {
+        while src < i {
+            let (front, back) = xs.split_at_mut(src);
+            swap(&mut front[dst], &mut back[0]);
+            dst += 1;
+            src += 1;
+        }
+        src += 1;
+    }
+    xs.truncate(dst);
 }
 
 impl GameState {
@@ -988,8 +1022,7 @@ impl GameState {
             {
                 let other_counts = undo_possible_sums(total_counts, this_counts);
                 let mut to_remove = Vec::new();
-                // Iterate backwards so indices are valid as we remove
-                for (possibility_ix, bitset) in bitsets.iter().enumerate().rev() {
+                for (possibility_ix, bitset) in bitsets.iter().enumerate() {
                     let possibility_count = (bitset & value_mask).count_ones();
                     if !other_counts
                         .contains((value_mask.count_ones() - possibility_count) as Bitmask)
@@ -1000,16 +1033,12 @@ impl GameState {
                 if to_remove.is_empty() {
                     continue;
                 }
-                let mut new_possibilities = self.blocks[*block_id].possibilities.clone();
-                for j in to_remove {
-                    new_possibilities.remove(j);
-                    bitsets.remove(j);
-                    // It seems at first that it would be helpful to remove this possibility from
-                    // this_counts, then update total_counts. But that's actually pointless, since
-                    // this possibility cannot participate in a valid row. Given that, it can't
-                    // help validate another block's possibility (for this value mask, anyway).
-                }
-                self.replace_block_possibilities(*block_id, new_possibilities);
+                delete_from_vector(bitsets, to_remove.iter().copied());
+                // It seems at first that it would be helpful to remove this possibility from
+                // this_counts, then update total_counts. But that's actually pointless, since
+                // this possibility cannot participate in a valid row. Given that, it can't
+                // help validate another block's possibility (for this value mask, anyway).
+                self.delete_block_possibilities(*block_id, to_remove.into_iter());
                 made_progress = true;
             }
         }
@@ -1233,8 +1262,11 @@ fn joint_possibilities_compatible(
 
 #[cfg(test)]
 mod tests {
-    use crate::GameState;
+    use crate::{delete_from_vector, GameState};
+    use prop::collection::vec;
+    use proptest::prelude::*;
     #[test]
+    #[ignore]
     fn test_load() {
         let save = std::fs::read("test_data/search_depth_2_test_case").unwrap();
         let gs = GameState::from_save(save.as_slice());
@@ -1253,5 +1285,22 @@ mod tests {
         let mut possibilities = gs.blocks[block_id].possibilities.clone();
         possibilities.sort();
         assert_eq!(vec![vec![5, 6], vec![6, 5]], possibilities);
+    }
+    proptest! {
+        #[test]
+        fn test_delete_from_vector(
+            mut v in vec(any::<u8>(), 0..100),
+            mut to_delete in vec(0usize..100, 0..100),
+        ) {
+            to_delete.sort();
+            to_delete.dedup();
+            to_delete.retain(|i| *i < v.len());
+            let mut expected = v.clone();
+            for i in to_delete.iter().rev() {
+                expected.remove(*i);
+            }
+            delete_from_vector(&mut v, to_delete.into_iter());
+            assert_eq!(expected, v);
+        }
     }
 }

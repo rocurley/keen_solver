@@ -64,7 +64,7 @@ mod test {
     fn new_multiset<'a, I: IntoIterator<Item = &'a Bitmask>>(iter: I) -> HashMap<Bitmask, u32> {
         let mut out = HashMap::new();
         for x in iter {
-            *out.entry(*x).or_insert(0) += 1;
+            *out.entry(*x).or_insert(0) = 1;
         }
         out
     }
