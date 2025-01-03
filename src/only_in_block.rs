@@ -9,14 +9,13 @@ use std::{
     simd::{cmp::SimdPartialEq, num::SimdUint, LaneCount, Simd, SupportedLaneCount},
 };
 
-const ONLY_IN_BLOCK_SIMD_LANES: usize = 8;
-const ONLY_IN_BLOCK_SENTINEL: u8 = u8::MAX;
-const ONLY_IN_BLOCK_SENTINEL_VEC: Simd<u8, ONLY_IN_BLOCK_SIMD_LANES> =
-    Simd::from_array([ONLY_IN_BLOCK_SENTINEL; ONLY_IN_BLOCK_SIMD_LANES]);
+const LANES: usize = 8;
+const SENTINEL: u8 = u8::MAX;
+const SENTINEL_VEC: Simd<u8, LANES> = Simd::from_array([SENTINEL; LANES]);
 struct BlockBitsets {
     block_id: usize,
     original_bitsets: Vec<u8>,
-    compacted_bitsets: Simd<u8, ONLY_IN_BLOCK_SIMD_LANES>,
+    compacted_bitsets: Simd<u8, LANES>,
 }
 
 fn simd_count_ones<const N: usize>(xs: &mut Simd<u32, N>)
@@ -93,20 +92,17 @@ impl GameState {
             let mut compacted_bitsets = bitset_possibilities.clone();
             compacted_bitsets.sort_unstable();
             compacted_bitsets.dedup();
-            if compacted_bitsets.len() > ONLY_IN_BLOCK_SIMD_LANES {
+            if compacted_bitsets.len() > LANES {
                 // 98th percentile
                 return false;
             }
-            if compacted_bitsets.contains(&ONLY_IN_BLOCK_SENTINEL) {
+            if compacted_bitsets.contains(&SENTINEL) {
                 return false;
             }
             block_bitsets.push(BlockBitsets {
                 block_id,
                 original_bitsets: bitset_possibilities,
-                compacted_bitsets: load_with_default(
-                    &compacted_bitsets,
-                    ONLY_IN_BLOCK_SENTINEL,
-                ),
+                compacted_bitsets: load_with_default(&compacted_bitsets, SENTINEL),
             });
         }
         let mut made_progress = false;
@@ -147,8 +143,8 @@ fn only_in_block_inner(
     let value_mask_vec = Simd::splat(value_mask);
     match_sets.truncate(0);
     match_sets.extend(block_bitsets.iter().map(|block| {
-        let mask = ONLY_IN_BLOCK_SENTINEL_VEC.simd_ne(block.compacted_bitsets);
-        let mut match_counts: Simd<u32, ONLY_IN_BLOCK_SIMD_LANES> =
+        let mask = SENTINEL_VEC.simd_ne(block.compacted_bitsets);
+        let mut match_counts: Simd<u32, LANES> =
             (block.compacted_bitsets & value_mask_vec).cast();
         simd_count_ones(&mut match_counts);
         BitMultiset::from_simd(match_counts, mask.cast())
@@ -161,9 +157,7 @@ fn only_in_block_inner(
         simd_count_ones(&mut match_counts);
         let needed_count = target_count - match_counts;
         let retain = other_counts.simd_contains(needed_count);
-        block.compacted_bitsets = retain
-            .cast()
-            .select(block.compacted_bitsets, ONLY_IN_BLOCK_SENTINEL_VEC);
+        block.compacted_bitsets = retain.cast().select(block.compacted_bitsets, SENTINEL_VEC);
     }
 }
 

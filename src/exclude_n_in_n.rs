@@ -1,8 +1,11 @@
 use crate::game::{Bitmask, GameState};
 use std::{
     cmp::Ordering,
-    simd::{cmp::SimdPartialEq, num::SimdUint, Mask, Simd},
+    simd::{cmp::SimdPartialEq, Simd},
 };
+
+const LANES: usize = 8;
+const ZERO: Simd<Bitmask, { LANES }> = Simd::from_array([0; LANES]);
 
 impl GameState {
     fn exclude_n_in_n_eligible(&mut self, y: usize, transposed: bool) -> &mut bool {
@@ -45,38 +48,12 @@ impl GameState {
         made_progress
     }
 
-    fn exclude_n_in_n_single(&mut self, transposed: bool, y: usize) -> bool {
-        let mut row = self.get_row(y, transposed);
-        for cell_mask in 1..1 << self.size {
-            let cell_mask_vec = Mask::from_bitmask(cell_mask);
-            let masked = cell_mask_vec.select(row.possibilities, Self::ZERO);
-            let seen = masked.reduce_or();
-            let unseen_vec = Simd::splat(!seen);
-            match Bitmask::count_ones(seen).cmp(&cell_mask.count_ones()) {
-                Ordering::Less => {
-                    self.print_save();
-                    dbg!(transposed, y);
-                    eprintln!("mask: {:#06b}", cell_mask);
-                    panic!("fewer possibilities than cells");
-                }
-                Ordering::Equal => {
-                    row.possibilities =
-                        cell_mask_vec.select(row.possibilities, row.possibilities & unseen_vec);
-                }
-                Ordering::Greater => {}
-            }
-        }
-        self.update_row(row)
-    }
-
-    const ZERO: Simd<Bitmask, 8> = Simd::<Bitmask, 8>::from_array([0; 8]);
-
     fn exclude_n_in_n_single_dual(&mut self, transposed: bool, y: usize) -> bool {
         let mut row = self.get_row(y, transposed);
         for value_mask in 1..1 << self.size {
             let vec_mask = Simd::<Bitmask, 8>::splat(value_mask);
             let matches = vec_mask & row.possibilities;
-            let match_mask = matches.simd_ne(Self::ZERO);
+            let match_mask = matches.simd_ne(ZERO);
             match match_mask
                 .to_bitmask()
                 .count_ones()
