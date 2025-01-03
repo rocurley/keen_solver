@@ -982,6 +982,10 @@ impl GameState {
             .filter(|(_, block)| block.cells.iter().any(&in_row));
         // block_bitsets holds the possibilities of the currently relevant blocks, with cells
         // outside the current row ignored and flattened down to a set.
+        struct BlockBitsets {
+            block_id: usize,
+            bitsets: Vec<u8>,
+        }
         let mut block_bitsets: Vec<_> = relevant_blocks
             .map(|(block_id, block)| {
                 // TODO: some strange behaviour with colinear identical values in the same
@@ -996,7 +1000,10 @@ impl GameState {
                             .fold(0, Bitmask::bitor)
                     })
                     .collect();
-                (block_id, bitset_possibilities)
+                BlockBitsets {
+                    block_id,
+                    bitsets: bitset_possibilities,
+                }
             })
             .collect();
         let mut made_progress = false;
@@ -1009,20 +1016,19 @@ impl GameState {
             // Matching 3,6 would yield {0,2}.
             let match_counts: Vec<BitMultiset> = block_bitsets
                 .iter()
-                .map(|(_, bitsets)| {
-                    bitsets
+                .map(|block| {
+                    block
+                        .bitsets
                         .iter()
                         .map(|bitset| (bitset & value_mask).count_ones() as Bitmask)
                         .collect()
                 })
                 .collect();
             let total_counts = possible_sums_iter(match_counts.iter().copied());
-            for (this_counts, (block_id, bitsets)) in
-                zip(match_counts, block_bitsets.iter_mut())
-            {
+            for (this_counts, block) in zip(match_counts, block_bitsets.iter_mut()) {
                 let other_counts = undo_possible_sums(total_counts, this_counts);
                 let mut to_remove = Vec::new();
-                for (possibility_ix, bitset) in bitsets.iter().enumerate() {
+                for (possibility_ix, bitset) in block.bitsets.iter().enumerate() {
                     let possibility_count = (bitset & value_mask).count_ones();
                     if !other_counts
                         .contains((value_mask.count_ones() - possibility_count) as Bitmask)
@@ -1033,12 +1039,12 @@ impl GameState {
                 if to_remove.is_empty() {
                     continue;
                 }
-                delete_from_vector(bitsets, to_remove.iter().copied());
+                delete_from_vector(&mut block.bitsets, to_remove.iter().copied());
                 // It seems at first that it would be helpful to remove this possibility from
                 // this_counts, then update total_counts. But that's actually pointless, since
                 // this possibility cannot participate in a valid row. Given that, it can't
                 // help validate another block's possibility (for this value mask, anyway).
-                self.delete_block_possibilities(*block_id, to_remove.into_iter());
+                self.delete_block_possibilities(block.block_id, to_remove.into_iter());
                 made_progress = true;
             }
         }
