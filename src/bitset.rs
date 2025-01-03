@@ -1,3 +1,9 @@
+use std::simd::{
+    cmp::{SimdPartialEq, SimdPartialOrd},
+    num::{SimdInt, SimdUint},
+    LaneCount, Mask, Simd, SupportedLaneCount,
+};
+
 use crate::game::Bitmask;
 
 #[derive(Clone, Copy, Eq, PartialEq, Debug)]
@@ -24,6 +30,37 @@ impl BitMultiset {
     #[cfg(test)]
     fn get(&self, x: Bitmask) -> u32 {
         (self.0 >> (x * MULTISET_WIDTH)) & MULTISET_MASK
+    }
+
+    pub fn from_simd<const LANES: usize>(
+        values: Simd<u32, LANES>,
+        mask: Mask<i32, LANES>,
+    ) -> Self
+    where
+        LaneCount<LANES>: SupportedLaneCount,
+    {
+        let one = Simd::splat(1);
+        let multiset_width_simd = Simd::splat(MULTISET_WIDTH as u32);
+        let bitmask_values = one << (values * multiset_width_simd);
+        let mask = mask.to_int().cast();
+        let out_simd = bitmask_values & mask;
+        let multiset = out_simd.reduce_or();
+        BitMultiset(multiset)
+    }
+
+    pub fn simd_contains<const LANES: usize>(
+        &self,
+        values: Simd<u32, LANES>,
+    ) -> Mask<i32, LANES>
+    where
+        LaneCount<LANES>: SupportedLaneCount,
+    {
+        let zero = Simd::splat(0);
+        let multiset_mask = Simd::splat(MULTISET_MASK);
+        let multiset_width_simd = Simd::splat(MULTISET_WIDTH as u32);
+        let bitmask_values = multiset_mask << (values * multiset_width_simd);
+        let self_vec = Simd::splat(self.0);
+        (self_vec & bitmask_values).simd_ne(zero)
     }
 }
 

@@ -9,7 +9,10 @@ use std::{
     iter::zip,
     mem::swap,
     ops::{BitOr, Index, IndexMut},
-    simd::{cmp::SimdPartialEq, num::SimdUint, Mask, Simd},
+    simd::{
+        cmp::SimdPartialEq, num::SimdUint, LaneCount, Mask, Simd, SimdElement,
+        SupportedLaneCount,
+    },
     time::{Duration, Instant},
 };
 
@@ -546,6 +549,14 @@ pub mod game {
     }
 }
 
+fn load_with_default<T: SimdElement, const LANES: usize>(xs: &[T], default: T) -> Simd<T, LANES>
+where
+    LaneCount<LANES>: SupportedLaneCount,
+{
+    let default = Simd::splat(default);
+    Simd::load_or(xs, default)
+}
+
 fn delete_from_vector<T>(xs: &mut Vec<T>, mut iter: impl Iterator<Item = usize>) {
     let Some(mut dst) = iter.next() else {
         return;
@@ -982,30 +993,39 @@ impl GameState {
             .filter(|(_, block)| block.cells.iter().any(&in_row));
         // block_bitsets holds the possibilities of the currently relevant blocks, with cells
         // outside the current row ignored and flattened down to a set.
-        let mut block_bitsets: Vec<_> = relevant_blocks
-            .map(|(block_id, block)| {
-                // TODO: some strange behaviour with colinear identical values in the same
-                // possibiltiy, which is currently allowed. It probably won't affect correctness.
-                let bitset_possibilities: Vec<_> = block
-                    .possibilities
-                    .iter()
-                    .map(|possibility| {
-                        zip(possibility, &block.cells)
-                            .filter(|(_, ix)| in_row(ix))
-                            .map(|(value, _)| (1 << (value - 1)))
-                            .fold(0, Bitmask::bitor)
-                    })
-                    .collect();
-                let mut compacted_bitsets = bitset_possibilities.clone();
-                compacted_bitsets.sort();
-                compacted_bitsets.dedup();
-                BlockBitsets {
-                    block_id,
-                    original_bitsets: bitset_possibilities,
-                    compacted_bitsets,
-                }
-            })
-            .collect();
+        let mut block_bitsets = Vec::new();
+        for (block_id, block) in relevant_blocks {
+            // TODO: some strange behaviour with colinear identical values in the same
+            // possibiltiy, which is currently allowed. It probably won't affect correctness.
+            let bitset_possibilities: Vec<_> = block
+                .possibilities
+                .iter()
+                .map(|possibility| {
+                    zip(possibility, &block.cells)
+                        .filter(|(_, ix)| in_row(ix))
+                        .map(|(value, _)| (1 << (value - 1)))
+                        .fold(0, Bitmask::bitor)
+                })
+                .collect();
+            let mut compacted_bitsets = bitset_possibilities.clone();
+            compacted_bitsets.sort();
+            compacted_bitsets.dedup();
+            if compacted_bitsets.len() > ONLY_IN_BLOCK_SIMD_LANES {
+                // 98th percentile
+                return false;
+            }
+            if compacted_bitsets.contains(&ONLY_IN_BLOCK_SENTINEL) {
+                return false;
+            }
+            block_bitsets.push(BlockBitsets {
+                block_id,
+                original_bitsets: bitset_possibilities,
+                compacted_bitsets: load_with_default(
+                    &compacted_bitsets,
+                    ONLY_IN_BLOCK_SENTINEL,
+                ),
+            });
+        }
         let mut made_progress = false;
         // A value mask has the same effect as its negation: counting even numbers is the same as
         // counting odd ones. This lets us stop halfway through the space.
@@ -1019,7 +1039,8 @@ impl GameState {
                     .iter()
                     .enumerate()
                     .filter_map(|(i, bitset)| {
-                        if block.compacted_bitsets.contains(bitset) {
+                        let bitset = Simd::splat(*bitset);
+                        if block.compacted_bitsets.simd_eq(bitset).any() {
                             None
                         } else {
                             Some(i)
@@ -1102,10 +1123,23 @@ impl GameState {
     }
 }
 
+const ONLY_IN_BLOCK_SIMD_LANES: usize = 8;
+const ONLY_IN_BLOCK_SENTINEL: u8 = u8::MAX;
+const ONLY_IN_BLOCK_SENTINEL_VEC: Simd<u8, ONLY_IN_BLOCK_SIMD_LANES> =
+    Simd::from_array([ONLY_IN_BLOCK_SENTINEL; ONLY_IN_BLOCK_SIMD_LANES]);
 struct BlockBitsets {
     block_id: usize,
     original_bitsets: Vec<u8>,
-    compacted_bitsets: Vec<u8>,
+    compacted_bitsets: Simd<u8, ONLY_IN_BLOCK_SIMD_LANES>,
+}
+
+fn simd_count_ones<const N: usize>(xs: &mut Simd<u32, N>)
+where
+    LaneCount<N>: SupportedLaneCount,
+{
+    for x in xs.as_mut_array() {
+        *x = x.count_ones();
+    }
 }
 
 fn only_in_block_inner(block_bitsets: &mut [BlockBitsets], value_mask: u8) {
@@ -1113,24 +1147,28 @@ fn only_in_block_inner(block_bitsets: &mut [BlockBitsets], value_mask: u8) {
     // acheivable across the different possibilities. For example, when matching
     // 2,4,6 against possibilities [(1,2),(2,4),(3,6)] the result will be {1,2}.
     // Matching 3,6 would yield {0,2}.
-    let match_counts: Vec<BitMultiset> = block_bitsets
+    let value_mask_vec = Simd::splat(value_mask);
+    let match_sets: Vec<BitMultiset> = block_bitsets
         .iter()
         .map(|block| {
-            block
-                .compacted_bitsets
-                .iter()
-                .map(|bitset| (bitset & value_mask).count_ones() as Bitmask)
-                .collect()
+            let mask = ONLY_IN_BLOCK_SENTINEL_VEC.simd_ne(block.compacted_bitsets);
+            let mut match_counts: Simd<u32, ONLY_IN_BLOCK_SIMD_LANES> =
+                (block.compacted_bitsets & value_mask_vec).cast();
+            simd_count_ones(&mut match_counts);
+            BitMultiset::from_simd(match_counts, mask.cast())
         })
         .collect();
-    let target_count = value_mask.count_ones();
-    let total_counts = possible_sums_iter(match_counts.iter().copied());
-    for (this_counts, block) in zip(match_counts, block_bitsets.iter_mut()) {
+    let target_count = Simd::splat(value_mask.count_ones());
+    let total_counts = possible_sums_iter(match_sets.iter().copied());
+    for (this_counts, block) in zip(match_sets, block_bitsets.iter_mut()) {
         let other_counts = undo_possible_sums(total_counts, this_counts);
-        block.compacted_bitsets.retain(|bitset| {
-            let possibility_count = (bitset & value_mask).count_ones();
-            other_counts.contains((target_count - possibility_count) as Bitmask)
-        });
+        let mut match_counts = (block.compacted_bitsets & value_mask_vec).cast();
+        simd_count_ones(&mut match_counts);
+        let needed_count = target_count - match_counts;
+        let retain = other_counts.simd_contains(needed_count);
+        block.compacted_bitsets = retain
+            .cast()
+            .select(block.compacted_bitsets, ONLY_IN_BLOCK_SENTINEL_VEC);
     }
 }
 
