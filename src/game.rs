@@ -21,12 +21,16 @@ pub struct Constraint {
 }
 
 impl Constraint {
-    fn satisfied_by(self, v: &[i32]) -> bool {
+    fn satisfied_by(self, v: &[i8]) -> bool {
         match self.op {
-            Operator::Add => v.iter().sum::<i32>() == self.val,
-            Operator::Mul => v.iter().product::<i32>() == self.val,
-            Operator::Sub => v[0] - v[1] == self.val || v[1] - v[0] == self.val,
-            Operator::Div => v[0] * self.val == v[1] || v[1] * self.val == v[0],
+            Operator::Add => v.iter().map(|x| *x as i32).sum::<i32>() == self.val,
+            Operator::Mul => v.iter().map(|x| *x as i32).product::<i32>() == self.val,
+            Operator::Sub => {
+                v[0] as i32 - v[1] as i32 == self.val || v[1] as i32 - v[0] as i32 == self.val
+            }
+            Operator::Div => {
+                v[0] as i32 * self.val == v[1] as i32 || v[1] as i32 * self.val == v[0] as i32
+            }
         }
     }
 }
@@ -50,7 +54,7 @@ pub struct BlockInfo {
     #[readonly]
     pub interacting_blocks: Vec<usize>,
     #[readonly]
-    pub possibilities: Vec<Vec<i32>>,
+    pub possibilities: Vec<Vec<i8>>,
     pub must_be_in_block_eligible: bool,
     pub compatibility_search_eligible: bool,
     pub radial_search_eligible: bool,
@@ -67,16 +71,16 @@ impl BlockInfo {
             self.interacting_blocks.push(ix);
         }
     }
-    pub fn possibilities(&self, board_size: usize) -> impl '_ + Iterator<Item = Vec<i32>> {
+    pub fn possibilities(&self, board_size: usize) -> impl '_ + Iterator<Item = Vec<i8>> {
         let is_linear = self.is_linear(board_size);
-        let mut it: Box<dyn Iterator<Item = (i32, Vec<i32>)>> =
-            Box::new((1..(board_size as i32) + 1).map(|x| (x, vec![x])));
+        let mut it: Box<dyn Iterator<Item = (i8, Vec<i8>)>> =
+            Box::new((1..(board_size as i8) + 1).map(|x| (x, vec![x])));
         for _ in 1..self.cells.len() {
             it = Box::new(it.flat_map(move |(mut lb, v)| {
                 if is_linear {
                     lb += 1;
                 }
-                (lb..(board_size as i32) + 1).map(move |x| {
+                (lb..(board_size as i8) + 1).map(move |x| {
                     let mut v2 = v.clone();
                     v2.push(x);
                     (x, v2)
@@ -117,11 +121,11 @@ struct JointPossibilities<'a> {
     possibilities: &'a [Bitmask],
     cells: &'a [usize],
     board_size: usize,
-    values: Vec<i32>,
+    values: Vec<i8>,
 }
 
-fn next_values_list(board_size: usize, xs: &mut [i32]) -> bool {
-    let board_size = board_size as i32;
+fn next_values_list(board_size: usize, xs: &mut [i8]) -> bool {
+    let board_size = board_size as i8;
     for x in xs {
         if *x < board_size {
             *x += 1;
@@ -133,7 +137,7 @@ fn next_values_list(board_size: usize, xs: &mut [i32]) -> bool {
 }
 
 impl JointPossibilities<'_> {
-    fn next(&mut self) -> Option<&[i32]> {
+    fn next(&mut self) -> Option<&[i8]> {
         'outer: while next_values_list(self.board_size, &mut self.values) {
             for (pos, x) in self.possibilities.iter().zip(self.values.iter()) {
                 if pos & (1 << (x - 1)) == 0 {
@@ -227,7 +231,7 @@ impl GameState {
     pub fn replace_block_possibilities(
         &mut self,
         block_id: usize,
-        new_possibilities: Vec<Vec<i32>>,
+        new_possibilities: Vec<Vec<i8>>,
     ) -> bool {
         let block = &mut self.blocks[block_id];
         if block.possibilities == new_possibilities {

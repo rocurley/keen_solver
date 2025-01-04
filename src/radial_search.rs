@@ -79,7 +79,7 @@ impl GameState {
             fn can_increment(&self) -> bool {
                 self.possibility_ix + 1 < self.block.possibilities.len()
             }
-            fn current_possibility(&self) -> &[i32] {
+            fn current_possibility(&self) -> &[i8] {
                 &self.block.possibilities[self.possibility_ix]
             }
         }

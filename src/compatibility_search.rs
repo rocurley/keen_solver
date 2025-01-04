@@ -36,7 +36,7 @@ impl GameState {
     fn compatibility_search_inner(
         &self,
         block_id: usize,
-        block_joint_possibility: &[i32],
+        block_joint_possibility: &[i8],
     ) -> bool {
         let block = &self.blocks[block_id];
         let res = block.interacting_blocks.iter().all(|&neighbor_id| {
@@ -60,9 +60,9 @@ impl GameState {
 
 fn joint_possibilities_compatible(
     size: usize,
-    l_values: &[i32],
+    l_values: &[i8],
     l_cells: &[usize],
-    r_values: &[i32],
+    r_values: &[i8],
     r_cells: &[usize],
 ) -> bool {
     for (x, i) in l_values.iter().zip(l_cells.iter()) {
