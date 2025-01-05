@@ -1,5 +1,5 @@
 use std::{
-    iter::zip,
+    iter::{once, zip},
     simd::{cmp::SimdPartialEq, LaneCount, Simd, SupportedLaneCount},
 };
 
@@ -42,6 +42,27 @@ where
     }
     fn current_possibility_mask(&self) -> Simd<u64, LANES> {
         self.possibility_masks[self.possibility_ix]
+    }
+    fn new(size: usize, block: &'a BlockInfo, possibility_ix: usize) -> Self {
+        let possibility_masks = block
+            .possibilities
+            .iter()
+            .map(|p| {
+                let mut mask = Simd::<u64, LANES>::splat(0);
+                for (&value, ix) in zip(p, &block.cells) {
+                    let i = (ix % size) * size + value as usize - 1;
+                    mask.as_mut_array()[i / 64] |= 1 << (i % 64);
+                    let i = (size + ix / size) * size + value as usize - 1;
+                    mask.as_mut_array()[i / 64] |= 1 << (i % 64);
+                }
+                mask
+            })
+            .collect();
+        SearchBlockSimd {
+            block,
+            possibility_ix,
+            possibility_masks,
+        }
     }
 }
 
@@ -114,6 +135,19 @@ impl GameState {
         possibility_ix: usize,
         vectorize: bool,
     ) -> bool {
+        if vectorize {
+            match 2 * self.size * self.size {
+                0..=64 => self.radial_search_vectorized::<1>(block_id, possibility_ix),
+                65..=128 => self.radial_search_vectorized::<2>(block_id, possibility_ix),
+                129..=256 => self.radial_search_vectorized::<4>(block_id, possibility_ix),
+                _ => panic!("Size {} larger than expected", self.size),
+            }
+        } else {
+            self.radial_search_unvectorized(block_id, possibility_ix)
+        }
+    }
+
+    fn radial_search_unvectorized(&self, block_id: usize, possibility_ix: usize) -> bool {
         let block = &self.blocks[block_id];
         let mut search_space = vec![SearchBlock {
             block,
@@ -149,113 +183,79 @@ impl GameState {
             };
             search_space.push(sb);
         }
-
-        if vectorize {
-            match 2 * self.size * self.size {
-                0..=64 => search_vectorized::<1>(self.size, search_space),
-                65..=128 => search_vectorized::<2>(self.size, search_space),
-                129..=256 => search_vectorized::<4>(self.size, search_space),
-                _ => panic!("Size {} larger than expected", self.size),
+        loop {
+            let validation_failure = (1..search_space.len()).find(|&i| {
+                let r_block = &search_space[i];
+                r_block.interactions.iter().any(|interaction| {
+                    let local_val = r_block.current_possibility()[interaction.local_cell_ix];
+                    let other_val = search_space[interaction.other_block_ix]
+                        .current_possibility()[interaction.other_cell_ix];
+                    local_val == other_val
+                })
+            });
+            let mut increment_point = match validation_failure {
+                None => return true,
+                Some(x) => x,
+            };
+            // There's a conflict between search_space[increment_point] and some block in
+            // search_space[..increment_point].
+            while increment_point > 0 && !search_space[increment_point].can_increment() {
+                increment_point -= 1;
             }
-        } else {
-            search_unvectorized(search_space)
+            if increment_point == 0 {
+                return false;
+            }
+            search_space[increment_point].possibility_ix += 1;
+            for block in &mut search_space[increment_point + 1..] {
+                block.possibility_ix = 0;
+            }
         }
     }
-}
 
-fn search_unvectorized(mut search_space: Vec<SearchBlock<'_>>) -> bool {
-    loop {
-        let validation_failure = (1..search_space.len()).find(|&i| {
-            let r_block = &search_space[i];
-            r_block.interactions.iter().any(|interaction| {
-                let local_val = r_block.current_possibility()[interaction.local_cell_ix];
-                let other_val = search_space[interaction.other_block_ix].current_possibility()
-                    [interaction.other_cell_ix];
-                local_val == other_val
-            })
-        });
-        let mut increment_point = match validation_failure {
-            None => return true,
-            Some(x) => x,
-        };
-        // There's a conflict between search_space[increment_point] and some block in
-        // search_space[..increment_point].
-        while increment_point > 0 && !search_space[increment_point].can_increment() {
-            increment_point -= 1;
-        }
-        if increment_point == 0 {
-            return false;
-        }
-        search_space[increment_point].possibility_ix += 1;
-        for block in &mut search_space[increment_point + 1..] {
-            block.possibility_ix = 0;
-        }
-    }
-}
-
-fn search_vectorized<const LANES: usize>(
-    size: usize,
-    old_search_space: Vec<SearchBlock<'_>>,
-) -> bool
-where
-    LaneCount<LANES>: SupportedLaneCount,
-{
-    let mut search_space = Vec::<SearchBlockSimd<LANES>>::new();
-    for SearchBlock {
-        block,
-        possibility_ix,
-        interactions: _,
-    } in old_search_space
+    fn radial_search_vectorized<const LANES: usize>(
+        &self,
+        block_id: usize,
+        possibility_ix: usize,
+    ) -> bool
+    where
+        LaneCount<LANES>: SupportedLaneCount,
     {
-        let possibility_masks = block
-            .possibilities
-            .iter()
-            .map(|p| {
-                let mut mask = Simd::<u64, LANES>::splat(0);
-                for (&value, ix) in zip(p, &block.cells) {
-                    let i = (ix % size) * size + value as usize - 1;
-                    mask.as_mut_array()[i / 64] |= 1 << (i % 64);
-                    let i = (size + ix / size) * size + value as usize - 1;
-                    mask.as_mut_array()[i / 64] |= 1 << (i % 64);
+        let block = &self.blocks[block_id];
+        let mut search_space = vec![SearchBlockSimd::new(self.size, block, possibility_ix)];
+        for &i in &block.interacting_blocks {
+            let block = &self.blocks[i];
+            let sb = SearchBlockSimd::new(self.size, block, 0);
+            search_space.push(sb);
+        }
+        loop {
+            let mut seen = search_space[0].current_possibility_mask();
+            let validation_failure = (1..search_space.len()).find(|&i| {
+                let r_block = &search_space[i];
+                let r_mask = r_block.current_possibility_mask();
+                if (r_mask & seen).simd_ne(Simd::splat(0)).any() {
+                    return true;
                 }
-                mask
-            })
-            .collect();
-        let sb = SearchBlockSimd {
-            block,
-            possibility_ix,
-            possibility_masks,
-        };
-        search_space.push(sb);
-    }
-    loop {
-        let mut seen = search_space[0].current_possibility_mask();
-        let validation_failure = (1..search_space.len()).find(|&i| {
-            let r_block = &search_space[i];
-            let r_mask = r_block.current_possibility_mask();
-            if (r_mask & seen).simd_ne(Simd::splat(0)).any() {
-                return true;
+                seen |= r_mask;
+                false
+            });
+            let mut increment_point = match validation_failure {
+                None => {
+                    return true;
+                }
+                Some(x) => x,
+            };
+            // There's a conflict between search_space[increment_point] and some block in
+            // search_space[..increment_point].
+            while increment_point > 0 && !search_space[increment_point].can_increment() {
+                increment_point -= 1;
             }
-            seen |= r_mask;
-            false
-        });
-        let mut increment_point = match validation_failure {
-            None => {
-                return true;
+            if increment_point == 0 {
+                return false;
             }
-            Some(x) => x,
-        };
-        // There's a conflict between search_space[increment_point] and some block in
-        // search_space[..increment_point].
-        while increment_point > 0 && !search_space[increment_point].can_increment() {
-            increment_point -= 1;
-        }
-        if increment_point == 0 {
-            return false;
-        }
-        search_space[increment_point].possibility_ix += 1;
-        for block in &mut search_space[increment_point + 1..] {
-            block.possibility_ix = 0;
+            search_space[increment_point].possibility_ix += 1;
+            for block in &mut search_space[increment_point + 1..] {
+                block.possibility_ix = 0;
+            }
         }
     }
 }
