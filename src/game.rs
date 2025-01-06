@@ -108,7 +108,7 @@ impl BlockInfo {
         let mut iter = self.joint_possibilities(board_size);
         let mut possiblities = Vec::new();
         while let Some(p) = iter.next() {
-            possiblities.push(p.to_vec());
+            possiblities.push(p);
         }
         self.possibilities = possiblities;
     }
