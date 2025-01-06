@@ -1,4 +1,11 @@
-use std::{collections::HashMap, fmt::Debug, iter::zip, simd::Simd, usize};
+use std::{
+    cmp,
+    collections::HashMap,
+    fmt::Debug,
+    iter::{empty, once, zip},
+    simd::Simd,
+    usize,
+};
 
 use pest::Parser;
 use pest_derive::Parser;
@@ -91,13 +98,10 @@ impl BlockInfo {
             .filter(|v| self.constraint.satisfied_by(v))
     }
     fn joint_possibilities<'a>(&'a self, board_size: usize) -> JointPossibilities<'a> {
-        let mut values = vec![1; self.cells.len()];
-        values[0] = 0;
         JointPossibilities {
-            constraint: self.constraint,
             cells: &self.cells,
             board_size,
-            values,
+            iter: constraint_satisfying_values(self.constraint, self.cells.len(), board_size),
         }
     }
     fn fill_in_possibilities(&mut self, board_size: usize) {
@@ -111,10 +115,9 @@ impl BlockInfo {
 }
 
 struct JointPossibilities<'a> {
-    constraint: Constraint,
     cells: &'a [usize],
     board_size: usize,
-    values: Vec<i8>,
+    iter: Box<dyn Iterator<Item = Vec<i8>>>,
 }
 
 fn next_values_list(board_size: usize, xs: &mut [i8]) -> bool {
@@ -129,14 +132,70 @@ fn next_values_list(board_size: usize, xs: &mut [i8]) -> bool {
     false
 }
 
-impl JointPossibilities<'_> {
-    fn next(&mut self) -> Option<&[i8]> {
-        'outer: while next_values_list(self.board_size, &mut self.values) {
-            if !self.constraint.satisfied_by(&self.values) {
-                continue;
+fn constraint_satisfying_values(
+    constraint: Constraint,
+    count: usize,
+    size: usize,
+) -> Box<dyn Iterator<Item = Vec<i8>>> {
+    match constraint.op {
+        Operator::Add => {
+            if count == 1 {
+                return Box::new(once(vec![constraint.val as i8]));
             }
-            for ((i, x), ci) in self.values.iter().enumerate().zip(self.cells.iter()) {
-                for (y, cj) in self.values[i + 1..].iter().zip(self.cells[i + 1..].iter()) {
+            let max = cmp::min(size as i32, constraint.val - (count as i32 - 1)) as i8;
+            let min = cmp::max(1, constraint.val - (count as i32 - 1) * (size as i32)) as i8;
+            let out = (min..=max).flat_map(move |x| {
+                let new_constraint = Constraint {
+                    op: constraint.op,
+                    val: constraint.val - x as i32,
+                };
+                constraint_satisfying_values(new_constraint, count - 1, size).map(
+                    move |mut xs| {
+                        xs.push(x);
+                        xs
+                    },
+                )
+            });
+            Box::new(out)
+        }
+        Operator::Mul => {
+            if (size as i32).pow(count as u32) < constraint.val {
+                return Box::new(empty());
+            }
+            if count == 1 {
+                return Box::new(once(vec![constraint.val as i8]));
+            }
+            let divisors = (1..=size as i32).filter(move |x| constraint.val % x == 0);
+            let out = divisors.flat_map(move |x| {
+                let new_constraint = Constraint {
+                    op: constraint.op,
+                    val: constraint.val / x,
+                };
+                constraint_satisfying_values(new_constraint, count - 1, size).map(
+                    move |mut xs| {
+                        xs.push(x as i8);
+                        xs
+                    },
+                )
+            });
+            Box::new(out)
+        }
+        Operator::Sub => {
+            let n = constraint.val as i8;
+            Box::new((1..=size as i8 - n).flat_map(move |x| [vec![x, n + x], vec![n + x, x]]))
+        }
+        Operator::Div => {
+            let n = constraint.val as i8;
+            Box::new((1..=size as i8 / n).flat_map(move |x| [vec![x, n * x], vec![n * x, x]]))
+        }
+    }
+}
+
+impl JointPossibilities<'_> {
+    fn next(&mut self) -> Option<Vec<i8>> {
+        'outer: for p in self.iter.by_ref() {
+            for ((i, x), ci) in p.iter().enumerate().zip(self.cells.iter()) {
+                for (y, cj) in p[i + 1..].iter().zip(self.cells[i + 1..].iter()) {
                     if x == y
                         && (ci / self.board_size == cj / self.board_size
                             || ci % self.board_size == cj % self.board_size)
@@ -145,7 +204,7 @@ impl JointPossibilities<'_> {
                     }
                 }
             }
-            return Some(&self.values);
+            return Some(p);
         }
         None
     }
@@ -495,4 +554,72 @@ pub fn parse_game_id(raw: &str) -> GameState {
     };
     out.initialize_cell_possibilities();
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{constraint_satisfying_values, next_values_list, Constraint, Operator};
+    use proptest::prelude::*;
+
+    fn constraint_satisfying_values_brute(
+        constraint: Constraint,
+        count: usize,
+        size: usize,
+    ) -> Vec<Vec<i8>> {
+        let mut scratch = vec![1; count];
+        let mut out = Vec::new();
+        while next_values_list(size, &mut scratch) {
+            if !constraint.satisfied_by(&scratch) {
+                continue;
+            }
+            out.push(scratch.to_vec());
+        }
+        out
+    }
+
+    fn any_op() -> impl Strategy<Value = Operator> {
+        use Operator::*;
+        prop_oneof![Just(Add), Just(Mul), Just(Sub), Just(Div),]
+    }
+
+    #[derive(Clone, Debug)]
+    struct TestCase {
+        size: usize,
+        count: usize,
+        constraint: Constraint,
+    }
+
+    fn count(op: Operator) -> BoxedStrategy<usize> {
+        use Operator::*;
+        match op {
+            Sub | Div => Strategy::boxed(Just(2usize)),
+            Add | Mul => Strategy::boxed(2usize..6),
+        }
+    }
+    fn val(op: Operator, size: usize) -> BoxedStrategy<i32> {
+        use Operator::*;
+        match op {
+            Add | Mul => Strategy::boxed(1i32..500),
+            Sub => Strategy::boxed(1..(size as i32 - 1)),
+            Div => Strategy::boxed(2..size as i32),
+        }
+    }
+    prop_compose! {
+        fn test_case()(size in 4usize..9, op in any_op())
+            (count in count(op), op in Just(op), size in Just(size),val in val(op, size)) -> TestCase {
+            TestCase{size, count, constraint: Constraint{val, op}}
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn test_constraint_satisfying_values(tc in test_case()) {
+            let mut expected = constraint_satisfying_values_brute(tc.constraint, tc.count, tc.size);
+            prop_assume!(!expected.is_empty());
+            let mut actual :Vec<_>= constraint_satisfying_values(tc.constraint, tc.count, tc.size).collect();
+            expected.sort();
+            actual.sort();
+            assert_eq!(expected, actual);
+        }
+    }
 }
