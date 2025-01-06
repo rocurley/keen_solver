@@ -90,24 +90,18 @@ impl BlockInfo {
         it.map(|(_, v)| v)
             .filter(|v| self.constraint.satisfied_by(v))
     }
-    fn joint_possibilities<'a>(
-        &'a self,
-        possibilities: &'a [Bitmask],
-        board_size: usize,
-    ) -> JointPossibilities<'a> {
+    fn joint_possibilities<'a>(&'a self, board_size: usize) -> JointPossibilities<'a> {
         let mut values = vec![1; self.cells.len()];
         values[0] = 0;
         JointPossibilities {
             constraint: self.constraint,
             cells: &self.cells,
-            possibilities,
             board_size,
             values,
         }
     }
     fn fill_in_possibilities(&mut self, board_size: usize) {
-        let dummy_cell_possibilities = vec![(1 << board_size) - 1; self.cells.len()];
-        let mut iter = self.joint_possibilities(&dummy_cell_possibilities, board_size);
+        let mut iter = self.joint_possibilities(board_size);
         let mut possiblities = Vec::new();
         while let Some(p) = iter.next() {
             possiblities.push(p.to_vec());
@@ -118,7 +112,6 @@ impl BlockInfo {
 
 struct JointPossibilities<'a> {
     constraint: Constraint,
-    possibilities: &'a [Bitmask],
     cells: &'a [usize],
     board_size: usize,
     values: Vec<i8>,
@@ -139,11 +132,6 @@ fn next_values_list(board_size: usize, xs: &mut [i8]) -> bool {
 impl JointPossibilities<'_> {
     fn next(&mut self) -> Option<&[i8]> {
         'outer: while next_values_list(self.board_size, &mut self.values) {
-            for (pos, x) in self.possibilities.iter().zip(self.values.iter()) {
-                if pos & (1 << (x - 1)) == 0 {
-                    continue 'outer;
-                }
-            }
             if !self.constraint.satisfied_by(&self.values) {
                 continue;
             }
