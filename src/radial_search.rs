@@ -246,9 +246,10 @@ impl GameState {
                 }
                 Some(x) => x,
             };
-            let seen_range_end = increment_point;
             // There's a conflict between search_space[increment_point] and some block in
             // search_space[..increment_point].
+            let seen_range_end = increment_point;
+            debug_assert!(seen == reduce_possibility_masks(&search_space[..seen_range_end]));
             while increment_point > 0 && !search_space[increment_point].can_increment() {
                 increment_point -= 1;
             }
@@ -256,6 +257,7 @@ impl GameState {
                 return false;
             }
             start_point = increment_point;
+            // Roll seen back to the start point
             seen &= !reduce_possibility_masks(&search_space[start_point..seen_range_end]);
             search_space[increment_point].possibility_ix += 1;
             for block in &mut search_space[increment_point + 1..] {
