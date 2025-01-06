@@ -303,23 +303,12 @@ impl GameState {
         }
     }
     fn initialize_cell_possibilities(&mut self) {
-        let block_possibilities: Vec<Bitmask> = self
-            .blocks
-            .iter()
-            .map(|b| {
-                let mut mask = 0;
-                for possibility in b.possibilities(self.size) {
-                    for x in possibility {
-                        mask |= 1 << (x - 1);
-                    }
+        for block in &self.blocks {
+            for possibility in &block.possibilities {
+                for (&value, &i) in zip(possibility, &block.cells) {
+                    self.cells.possibilities[i] |= 1 << (value - 1);
                 }
-                mask
-            })
-            .collect();
-        for (possibilities, &block_id) in
-            zip(&mut self.cells.possibilities, &self.cells.block_id)
-        {
-            *possibilities &= block_possibilities[block_id];
+            }
         }
     }
     pub fn from_save(r: impl std::io::BufRead) -> Self {
