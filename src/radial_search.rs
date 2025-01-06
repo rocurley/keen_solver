@@ -1,5 +1,6 @@
 use std::{
-    iter::{once, zip},
+    iter::zip,
+    ops::BitOr,
     simd::{cmp::SimdPartialEq, LaneCount, Simd, SupportedLaneCount},
 };
 
@@ -227,9 +228,10 @@ impl GameState {
             let sb = SearchBlockSimd::new(self.size, block, 0);
             search_space.push(sb);
         }
+        let mut start_point = 1;
+        let mut seen = search_space[0].current_possibility_mask();
         loop {
-            let mut seen = search_space[0].current_possibility_mask();
-            let validation_failure = (1..search_space.len()).find(|&i| {
+            let validation_failure = (start_point..search_space.len()).find(|&i| {
                 let r_block = &search_space[i];
                 let r_mask = r_block.current_possibility_mask();
                 if (r_mask & seen).simd_ne(Simd::splat(0)).any() {
@@ -244,6 +246,7 @@ impl GameState {
                 }
                 Some(x) => x,
             };
+            let seen_range_end = increment_point;
             // There's a conflict between search_space[increment_point] and some block in
             // search_space[..increment_point].
             while increment_point > 0 && !search_space[increment_point].can_increment() {
@@ -252,12 +255,25 @@ impl GameState {
             if increment_point == 0 {
                 return false;
             }
+            start_point = increment_point;
+            seen &= !reduce_possibility_masks(&search_space[start_point..seen_range_end]);
             search_space[increment_point].possibility_ix += 1;
             for block in &mut search_space[increment_point + 1..] {
                 block.possibility_ix = 0;
             }
         }
     }
+}
+
+fn reduce_possibility_masks<const LANES: usize>(
+    sbs: &[SearchBlockSimd<LANES>],
+) -> Simd<u64, LANES>
+where
+    LaneCount<LANES>: SupportedLaneCount,
+{
+    sbs.iter()
+        .map(SearchBlockSimd::current_possibility_mask)
+        .fold(Simd::splat(0), Simd::bitor)
 }
 
 #[cfg(test)]
