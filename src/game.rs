@@ -2,7 +2,7 @@ use std::{
     cmp,
     collections::HashMap,
     fmt::Debug,
-    iter::{empty, once, zip},
+    iter::{empty, once, repeat_n, zip},
     simd::Simd,
     usize,
 };
@@ -101,7 +101,12 @@ impl BlockInfo {
         JointPossibilities {
             cells: &self.cells,
             board_size,
-            iter: constraint_satisfying_values(self.constraint, self.cells.len(), board_size),
+            iter: constraint_satisfying_values(
+                self.constraint,
+                self.cells.len(),
+                self.cells.len(),
+                board_size,
+            ),
         }
     }
     fn fill_in_possibilities(&mut self, board_size: usize) {
@@ -135,34 +140,18 @@ fn next_values_list(board_size: usize, xs: &mut [i8]) -> bool {
 fn constraint_satisfying_values(
     constraint: Constraint,
     count: usize,
+    remaining_count: usize,
     size: usize,
 ) -> Box<dyn Iterator<Item = Vec<i8>>> {
     match constraint.op {
         Operator::Add => {
-            if count == 1 {
-                return Box::new(once(vec![constraint.val as i8]));
-            }
-            let max = cmp::min(size as i32, constraint.val - (count as i32 - 1)) as i8;
-            let min = cmp::max(1, constraint.val - (count as i32 - 1) * (size as i32)) as i8;
-            let out = (min..=max).flat_map(move |x| {
-                let new_constraint = Constraint {
-                    op: constraint.op,
-                    val: constraint.val - x as i32,
-                };
-                constraint_satisfying_values(new_constraint, count - 1, size).map(
-                    move |mut xs| {
-                        xs.push(x);
-                        xs
-                    },
-                )
-            });
-            Box::new(out)
+            Box::new(addition_possibilities(size, count, constraint.val).into_iter())
         }
         Operator::Mul => {
-            if (size as i32).pow(count as u32) < constraint.val {
+            if (size as i32).pow(remaining_count as u32) < constraint.val {
                 return Box::new(empty());
             }
-            if count == 1 {
+            if remaining_count == 1 {
                 return Box::new(once(vec![constraint.val as i8]));
             }
             let divisors = (1..=size as i32).filter(move |x| constraint.val % x == 0);
@@ -171,12 +160,11 @@ fn constraint_satisfying_values(
                     op: constraint.op,
                     val: constraint.val / x,
                 };
-                constraint_satisfying_values(new_constraint, count - 1, size).map(
-                    move |mut xs| {
+                constraint_satisfying_values(new_constraint, count, remaining_count - 1, size)
+                    .map(move |mut xs| {
                         xs.push(x as i8);
                         xs
-                    },
-                )
+                    })
             });
             Box::new(out)
         }
@@ -187,6 +175,39 @@ fn constraint_satisfying_values(
         Operator::Div => {
             let n = constraint.val as i8;
             Box::new((1..=size as i8 / n).flat_map(move |x| [vec![x, n * x], vec![n * x, x]]))
+        }
+    }
+}
+
+fn addition_possibilities(size: usize, count: usize, target: i32) -> Vec<Vec<i8>> {
+    let set_to_min = |i: usize, v: &mut Vec<i8>| {
+        let remaining = target - v[..i].iter().map(|x| *x as i32).sum::<i32>();
+        let min = cmp::max(1, remaining - size as i32 * (count - 1 - i) as i32);
+        v[i] = min as i8;
+    };
+    let max = |i: usize, v: &Vec<i8>| -> i8 {
+        let remaining = target - v[..i].iter().map(|x| *x as i32).sum::<i32>();
+        let max = cmp::min(size as i32, remaining - (count - 1 - i) as i32);
+        max as i8
+    };
+    let mut out = Vec::new();
+    let mut v = vec![0; count];
+    for i in 0..count {
+        set_to_min(i, &mut v);
+    }
+    loop {
+        out.push(v.clone());
+        let increment_point = v[..count - 1]
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(i, x)| **x < max(*i, &v));
+        let Some((i, _)) = increment_point else {
+            return out;
+        };
+        v[i] += 1;
+        for i in i + 1..count {
+            set_to_min(i, &mut v);
         }
     }
 }
@@ -616,7 +637,7 @@ mod tests {
         fn test_constraint_satisfying_values(tc in test_case()) {
             let mut expected = constraint_satisfying_values_brute(tc.constraint, tc.count, tc.size);
             prop_assume!(!expected.is_empty());
-            let mut actual :Vec<_>= constraint_satisfying_values(tc.constraint, tc.count, tc.size).collect();
+            let mut actual :Vec<_>= constraint_satisfying_values(tc.constraint, tc.count, tc.count, tc.size).collect();
             expected.sort();
             actual.sort();
             assert_eq!(expected, actual);
