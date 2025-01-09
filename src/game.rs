@@ -2,14 +2,16 @@ use std::{
     cmp,
     collections::HashMap,
     fmt::Debug,
-    iter::{empty, once, repeat_n, zip},
+    iter::{empty, once, zip},
     simd::Simd,
     usize,
 };
 
+use bumpalo::Bump;
 use pest::Parser;
 use pest_derive::Parser;
 use union_find::{QuickUnionUf, UnionByRank, UnionFind};
+use yoke::Yoke;
 
 use crate::delete_from_vector;
 
@@ -231,8 +233,9 @@ impl JointPossibilities<'_> {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug)]
 pub struct GameState {
+    pub arena: Yoke<&'static Bump, Box<Bump>>,
     pub desc: String,
     pub size: usize,
     pub cells: CellInfo,
@@ -244,6 +247,41 @@ pub struct GameState {
     pub skip_inelligible: bool,
     col_idx: Simd<usize, 8>,
 }
+
+impl PartialEq for GameState {
+    fn eq(&self, other: &Self) -> bool {
+        self.desc == other.desc
+            && self.size == other.size
+            && self.cells == other.cells
+            && self.blocks == other.blocks
+            && self.rows_exclude_n_in_n_eligible == other.rows_exclude_n_in_n_eligible
+            && self.cols_exclude_n_in_n_eligible == other.cols_exclude_n_in_n_eligible
+            && self.rows_only_in_block_eligible == other.rows_only_in_block_eligible
+            && self.cols_only_in_block_eligible == other.cols_only_in_block_eligible
+            && self.skip_inelligible == other.skip_inelligible
+            && self.col_idx == other.col_idx
+    }
+}
+impl Eq for GameState {}
+
+impl Clone for GameState {
+    fn clone(&self) -> Self {
+        Self {
+            arena: Yoke::attach_to_cart(Box::new(Bump::new()), |bump| bump),
+            desc: self.desc.clone(),
+            size: self.size.clone(),
+            cells: self.cells.clone(),
+            blocks: self.blocks.clone(),
+            rows_exclude_n_in_n_eligible: self.rows_exclude_n_in_n_eligible.clone(),
+            cols_exclude_n_in_n_eligible: self.cols_exclude_n_in_n_eligible.clone(),
+            rows_only_in_block_eligible: self.rows_only_in_block_eligible.clone(),
+            cols_only_in_block_eligible: self.cols_only_in_block_eligible.clone(),
+            skip_inelligible: self.skip_inelligible.clone(),
+            col_idx: self.col_idx.clone(),
+        }
+    }
+}
+
 pub struct RowCopy {
     y: usize,
     transposed: bool,
@@ -561,7 +599,9 @@ pub fn parse_game_id(raw: &str) -> GameState {
     }
     let col_index_vec: Vec<_> = (0..size).map(|x| x * size).collect();
     let col_idx = Simd::load_or(&col_index_vec, Simd::splat(usize::MAX));
+    let arena = Yoke::attach_to_cart(Box::new(Bump::new()), |bump| bump);
     let mut out = GameState {
+        arena,
         desc,
         size,
         blocks,

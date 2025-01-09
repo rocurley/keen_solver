@@ -11,12 +11,14 @@ debug = true
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+bumpalo = "3.16.0"
 clap = { version = "4.5.23", features = ["derive"] }
 pest = "2.7.3"
 pest_derive = "2.7.3"
 readonly = "0.2.12"
 tabled = "0.17.0"
 union-find = "0.4.1"
+yoke = "0.7.5"
 
 [dev-dependencies]
 proptest = "1.0.0"
