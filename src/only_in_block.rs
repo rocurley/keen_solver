@@ -82,7 +82,7 @@ impl<'arena> GameState<'arena> {
             let bitset_possibilities: Vec<_> = block
                 .possibilities
                 .iter()
-                .map(|possibility| {
+                .map(|&possibility| {
                     zip(possibility, &block.cells)
                         .filter(|(_, ix)| in_row(ix))
                         .map(|(value, _)| (1 << (value - 1)))

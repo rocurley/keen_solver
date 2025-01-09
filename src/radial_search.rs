@@ -6,8 +6,8 @@ use std::{
 
 use crate::game::{BlockInfo, GameState};
 
-struct SearchBlock<'a> {
-    block: &'a BlockInfo,
+struct SearchBlock<'arena, 'a> {
+    block: &'a BlockInfo<'arena>,
     possibility_ix: usize,
     interactions: Vec<CellInteraction>,
 }
@@ -16,7 +16,7 @@ struct CellInteraction {
     other_block_ix: usize,
     other_cell_ix: usize,
 }
-impl SearchBlock<'_> {
+impl SearchBlock<'_, '_> {
     fn can_increment(&self) -> bool {
         self.possibility_ix + 1 < self.block.possibilities.len()
     }
@@ -25,16 +25,16 @@ impl SearchBlock<'_> {
     }
 }
 
-struct SearchBlockSimd<'a, const LANES: usize>
+struct SearchBlockSimd<'arena, 'a, const LANES: usize>
 where
     LaneCount<LANES>: SupportedLaneCount,
 {
-    block: &'a BlockInfo,
+    block: &'a BlockInfo<'arena>,
     possibility_ix: usize,
     possibility_masks: Vec<Simd<u64, LANES>>,
 }
 
-impl<'a, const LANES: usize> SearchBlockSimd<'a, LANES>
+impl<'arena, 'a, const LANES: usize> SearchBlockSimd<'arena, 'a, LANES>
 where
     LaneCount<LANES>: SupportedLaneCount,
 {
@@ -44,11 +44,11 @@ where
     fn current_possibility_mask(&self) -> Simd<u64, LANES> {
         self.possibility_masks[self.possibility_ix]
     }
-    fn new(size: usize, block: &'a BlockInfo, possibility_ix: usize) -> Self {
+    fn new(size: usize, block: &'a BlockInfo<'arena>, possibility_ix: usize) -> Self {
         let possibility_masks = block
             .possibilities
             .iter()
-            .map(|p| {
+            .map(|&p| {
                 let mut mask = Simd::<u64, LANES>::splat(0);
                 for (&value, ix) in zip(p, &block.cells) {
                     let i = (ix % size) * size + value as usize - 1;
@@ -113,17 +113,17 @@ impl<'arena> GameState<'arena> {
     fn radial_search_single(&mut self, block_id: usize, vectorize: bool) -> bool {
         let mut new_possibilities = Vec::new();
         let possibilities = &self.blocks[block_id].possibilities;
-        for (i, p) in possibilities.iter().enumerate() {
+        for (i, &p) in possibilities.iter().enumerate() {
             // We assume that the puzzle is valid, so we can just keep the last possibility if
             // we've eliminated all others.
             if i == possibilities.len() - 1 && new_possibilities.is_empty() {
-                new_possibilities.push(p.clone());
+                new_possibilities.push(p);
                 continue;
             }
             if !self.radial_search_single_possibility(block_id, i, vectorize) {
                 continue;
             }
-            new_possibilities.push(p.clone());
+            new_possibilities.push(p);
         }
         let made_progress = self.replace_block_possibilities(block_id, new_possibilities);
         self.blocks[block_id].radial_search_eligible = false;
