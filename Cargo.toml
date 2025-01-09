@@ -18,7 +18,6 @@ pest_derive = "2.7.3"
 readonly = "0.2.12"
 tabled = "0.17.0"
 union-find = "0.4.1"
-yoke = "0.7.5"
 
 [dev-dependencies]
 proptest = "1.0.0"

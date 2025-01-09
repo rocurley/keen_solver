@@ -1,5 +1,6 @@
 use std::io::{stdin, stdout, BufRead};
 
+use bumpalo::Bump;
 use clap::Parser;
 use keen_solver::SolversStats;
 
@@ -25,7 +26,8 @@ fn main() {
     };
     for game_seed in stdin.lock().lines() {
         let game_seed = game_seed.unwrap();
-        let mut state = keen_solver::parse_game_id(&game_seed);
+        let arena = Bump::new();
+        let mut state = keen_solver::parse_game_id(&arena, &game_seed);
         while !state.solved() && state.try_solvers(stats.as_mut()) {}
         if state.solved() {
             //eprintln!("");

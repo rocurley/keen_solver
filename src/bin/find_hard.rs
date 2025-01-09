@@ -3,6 +3,7 @@ use std::{
     io::{stdin, BufRead},
 };
 
+use bumpalo::Bump;
 use keen_solver::{Solver, SolversStats};
 
 fn main() {
@@ -11,7 +12,8 @@ fn main() {
     let mut i = 0;
     for game_seed in stdin.lock().lines() {
         let game_seed = game_seed.unwrap();
-        let mut state = keen_solver::parse_game_id(&game_seed);
+        let arena = Bump::new();
+        let mut state = keen_solver::parse_game_id(&arena, &game_seed);
         let mut last_state = state.clone();
         while !state.solved() {
             state.try_solvers(Some(&mut stats));

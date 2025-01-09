@@ -52,7 +52,7 @@ fn delete_from_vector<T>(xs: &mut Vec<T>, mut iter: impl Iterator<Item = usize>)
     xs.truncate(dst);
 }
 
-impl GameState {
+impl<'arena> GameState<'arena> {
     pub fn write_save(&self, mut out: impl Write) {
         let mut write = |key, value: &str| {
             writeln!(out, "{}:{}:{}", key, value.len(), value).unwrap();
@@ -293,13 +293,15 @@ impl SolversStats {
 #[cfg(test)]
 mod tests {
     use crate::{delete_from_vector, GameState};
+    use bumpalo::Bump;
     use prop::collection::vec;
     use proptest::prelude::*;
     #[test]
     #[ignore]
     fn test_load() {
         let save = std::fs::read("test_data/search_depth_2_test_case").unwrap();
-        let gs = GameState::from_save(save.as_slice());
+        let arena = Bump::new();
+        let gs = GameState::from_save(&arena, save.as_slice());
         let mut new_save = Vec::new();
         gs.write_save(&mut new_save);
         assert_eq!(save, new_save);

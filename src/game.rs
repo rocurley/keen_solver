@@ -11,7 +11,6 @@ use bumpalo::Bump;
 use pest::Parser;
 use pest_derive::Parser;
 use union_find::{QuickUnionUf, UnionByRank, UnionFind};
-use yoke::Yoke;
 
 use crate::delete_from_vector;
 
@@ -233,9 +232,9 @@ impl JointPossibilities<'_> {
     }
 }
 
-#[derive(Debug)]
-pub struct GameState {
-    pub arena: Yoke<&'static Bump, Box<Bump>>,
+#[derive(Debug, Clone)]
+pub struct GameState<'arena> {
+    arena: &'arena Bump,
     pub desc: String,
     pub size: usize,
     pub cells: CellInfo,
@@ -248,7 +247,7 @@ pub struct GameState {
     col_idx: Simd<usize, 8>,
 }
 
-impl PartialEq for GameState {
+impl<'arena> PartialEq for GameState<'arena> {
     fn eq(&self, other: &Self) -> bool {
         self.desc == other.desc
             && self.size == other.size
@@ -262,25 +261,7 @@ impl PartialEq for GameState {
             && self.col_idx == other.col_idx
     }
 }
-impl Eq for GameState {}
-
-impl Clone for GameState {
-    fn clone(&self) -> Self {
-        Self {
-            arena: Yoke::attach_to_cart(Box::new(Bump::new()), |bump| bump),
-            desc: self.desc.clone(),
-            size: self.size.clone(),
-            cells: self.cells.clone(),
-            blocks: self.blocks.clone(),
-            rows_exclude_n_in_n_eligible: self.rows_exclude_n_in_n_eligible.clone(),
-            cols_exclude_n_in_n_eligible: self.cols_exclude_n_in_n_eligible.clone(),
-            rows_only_in_block_eligible: self.rows_only_in_block_eligible.clone(),
-            cols_only_in_block_eligible: self.cols_only_in_block_eligible.clone(),
-            skip_inelligible: self.skip_inelligible.clone(),
-            col_idx: self.col_idx.clone(),
-        }
-    }
-}
+impl<'arena> Eq for GameState<'arena> {}
 
 pub struct RowCopy {
     y: usize,
@@ -296,7 +277,7 @@ pub fn index(size: usize, x: usize, y: usize, transposed: bool) -> usize {
     }
 }
 
-impl GameState {
+impl<'arena> GameState<'arena> {
     pub fn mask_cell_possibilities(&mut self, cell_id: usize, mask: Bitmask) -> bool {
         let original = self.cells.possibilities[cell_id];
         if original == original & mask {
@@ -429,7 +410,7 @@ impl GameState {
             }
         }
     }
-    pub fn from_save(r: impl std::io::BufRead) -> Self {
+    pub fn from_save(arena: &'arena Bump, r: impl std::io::BufRead) -> Self {
         let mut kvs = HashMap::new();
         for line in r.lines() {
             let line = line.unwrap();
@@ -443,7 +424,7 @@ impl GameState {
         let size: usize = params[..params.len() - 2].parse().unwrap();
         let desc = &kvs["DESC"][0];
         let game_id = format!("{}:{}", size, desc);
-        let mut out = parse_game_id(&game_id);
+        let mut out = parse_game_id(arena, &game_id);
         let mut cell_possibilities = vec![0; size * size];
         for raw_move in kvs["MOVE"].iter() {
             let mut split = raw_move[1..].split(',');
@@ -482,7 +463,7 @@ impl GameState {
 #[grammar = "game_id.pest"]
 struct GameIDParser;
 
-pub fn parse_game_id(raw: &str) -> GameState {
+pub fn parse_game_id<'arena>(arena: &'arena Bump, raw: &'_ str) -> GameState<'arena> {
     let parsed = GameIDParser::parse(Rule::game_id, raw)
         .unwrap()
         .next()
@@ -599,7 +580,6 @@ pub fn parse_game_id(raw: &str) -> GameState {
     }
     let col_index_vec: Vec<_> = (0..size).map(|x| x * size).collect();
     let col_idx = Simd::load_or(&col_index_vec, Simd::splat(usize::MAX));
-    let arena = Yoke::attach_to_cart(Box::new(Bump::new()), |bump| bump);
     let mut out = GameState {
         arena,
         desc,

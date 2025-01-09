@@ -27,7 +27,7 @@ where
     }
 }
 
-impl GameState {
+impl<'arena> GameState<'arena> {
     fn only_in_block_eligilble(&mut self, y: usize, transposed: bool) -> &mut bool {
         if transposed {
             &mut self.cols_only_in_block_eligible[y]
@@ -163,11 +163,14 @@ fn only_in_block_inner(
 
 #[cfg(test)]
 mod tests {
+    use bumpalo::Bump;
+
     use crate::GameState;
     #[test]
     fn test_only_in_block() {
         let save = std::fs::read("test_data/single_5_possibility").unwrap();
-        let mut gs = GameState::from_save(save.as_slice());
+        let arena = Bump::new();
+        let mut gs = GameState::from_save(&arena, save.as_slice());
         let block_id = gs.cells.block_id[5];
         dbg!(&gs.blocks[block_id]);
         assert_eq!(gs.blocks[block_id].possibilities.len(), 4);

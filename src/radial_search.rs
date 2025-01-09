@@ -67,7 +67,7 @@ where
     }
 }
 
-impl GameState {
+impl<'arena> GameState<'arena> {
     pub fn radial_search(&mut self) -> bool {
         let mut made_progress = false;
         for block_id in 0..self.blocks.len() {
@@ -280,6 +280,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use bumpalo::Bump;
+
     use crate::GameState;
     #[test]
     fn test_vectorization_small() {
@@ -297,7 +299,8 @@ mod tests {
 
     fn single_vectorization_test(path: &str) {
         let save = std::fs::read(&path).unwrap();
-        let mut expected = GameState::from_save(save.as_slice());
+        let arena = Bump::new();
+        let mut expected = GameState::from_save(&arena, save.as_slice());
         let mut actual = expected.clone();
         let (block_id, _) = expected.most_interesting_block();
         let expected_progressed = expected.radial_search_single(block_id, false);

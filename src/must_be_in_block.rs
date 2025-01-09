@@ -1,7 +1,7 @@
 use crate::game::GameState;
 use std::simd::Simd;
 
-impl GameState {
+impl<'arena> GameState<'arena> {
     // If a given block requires that some number be in that block in a specific row or column,
     // filter out that number from the rest of the row or column.
     // Example: filter out 2 from a row containing a /2 block with possibilities (1,2,4)
