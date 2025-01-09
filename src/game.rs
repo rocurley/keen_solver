@@ -69,132 +69,55 @@ pub struct BlockInfo<'arena> {
 }
 
 impl<'arena> BlockInfo<'arena> {
-    fn is_linear(&self, board_size: usize) -> bool {
-        let i0 = self.cells[0];
-        self.cells.iter().all(|i| i / board_size == i0 / board_size)
-            || self.cells.iter().all(|i| i % board_size == i0 % board_size)
-    }
     fn add_interacting(&mut self, ix: usize) {
         if !self.interacting_blocks.contains(&ix) {
             self.interacting_blocks.push(ix);
         }
     }
-    pub fn possibilities(&self, board_size: usize) -> impl '_ + Iterator<Item = Vec<i8>> {
-        let is_linear = self.is_linear(board_size);
-        let mut it: Box<dyn Iterator<Item = (i8, Vec<i8>)>> =
-            Box::new((1..(board_size as i8) + 1).map(|x| (x, vec![x])));
-        for _ in 1..self.cells.len() {
-            it = Box::new(it.flat_map(move |(mut lb, v)| {
-                if is_linear {
-                    lb += 1;
-                }
-                (lb..(board_size as i8) + 1).map(move |x| {
-                    let mut v2 = v.clone();
-                    v2.push(x);
-                    (x, v2)
-                })
-            }));
-        }
-        it.map(|(_, v)| v)
-            .filter(|v| self.constraint.satisfied_by(v))
-    }
-    fn joint_possibilities<'a>(
-        &'a self,
-        arena: &'arena Bump,
-        board_size: usize,
-    ) -> JointPossibilities<'arena, 'a> {
-        JointPossibilities {
-            cells: &self.cells,
-            board_size,
-            iter: constraint_satisfying_values(
-                arena,
-                self.constraint,
-                self.cells.len(),
-                board_size,
-            ),
-        }
-    }
     fn fill_in_possibilities(&mut self, arena: &'arena Bump, board_size: usize) {
-        let mut iter = self.joint_possibilities(arena, board_size);
-        let mut possiblities = Vec::new();
-        while let Some(p) = iter.next() {
-            possiblities.push(p);
-        }
-        self.possibilities = possiblities;
+        self.possibilities =
+            constraint_satisfying_values(arena, self.constraint, &self.cells, board_size);
     }
-}
-
-struct JointPossibilities<'arena, 'a> {
-    cells: &'a [usize],
-    board_size: usize,
-    iter: Box<dyn Iterator<Item = &'arena [i8]> + 'arena>,
 }
 
 // TODO: maybe return a vec?
-fn constraint_satisfying_values<'arena>(
+fn constraint_satisfying_values<'arena, 'a>(
     arena: &'arena Bump,
     constraint: Constraint,
-    count: usize,
+    cells: &'a [usize],
     size: usize,
-) -> Box<dyn Iterator<Item = &'arena [i8]> + 'arena> {
+) -> Vec<&'arena [i8]> {
+    let count = cells.len();
+    let ctx = PossibilityContext { size, count, cells };
     match constraint.op {
-        Operator::Add => {
-            Box::new(addition_possibilities(arena, size, count, constraint.val).into_iter())
-        }
-        Operator::Mul => Box::new(
-            multiplication_possibilities_bad(size, count, count, constraint.val)
-                .map(|v| &*arena.alloc_slice_copy(&v)),
-        ),
+        Operator::Add => ctx.addition_possibilities(arena, constraint.val),
+        Operator::Mul => multiplication_possibilities_bad(size, count, count, constraint.val)
+            .filter(|v| ctx.no_conflict(v))
+            .map(|v| &*arena.alloc_slice_copy(&v))
+            .collect(),
         Operator::Sub => {
             let n = constraint.val as i8;
-            Box::new((1..=size as i8 - n).flat_map(move |x| {
-                [
-                    &*arena.alloc_slice_fill_iter([x, n + x]),
-                    &*arena.alloc_slice_fill_iter([n + x, x]),
-                ]
-            }))
+            (1..=size as i8 - n)
+                .flat_map(move |x| {
+                    [
+                        &*arena.alloc_slice_fill_iter([x, n + x]),
+                        &*arena.alloc_slice_fill_iter([n + x, x]),
+                    ]
+                })
+                .filter(|v| ctx.no_conflict(v))
+                .collect()
         }
         Operator::Div => {
             let n = constraint.val as i8;
-            Box::new((1..=size as i8 / n).flat_map(move |x| {
-                [
-                    &*arena.alloc_slice_fill_iter([x, n * x]),
-                    &*arena.alloc_slice_fill_iter([n * x, x]),
-                ]
-            }))
-        }
-    }
-}
-
-fn addition_possibilities(arena: &Bump, size: usize, count: usize, target: i32) -> Vec<&[i8]> {
-    let set_to_min = |i: usize, v: &mut Vec<i8>| {
-        let remaining = target - v[..i].iter().map(|x| *x as i32).sum::<i32>();
-        let min = cmp::max(1, remaining - size as i32 * (count - 1 - i) as i32);
-        v[i] = min as i8;
-    };
-    let max = |i: usize, v: &Vec<i8>| -> i8 {
-        let remaining = target - v[..i].iter().map(|x| *x as i32).sum::<i32>();
-        let max = cmp::min(size as i32, remaining - (count - 1 - i) as i32);
-        max as i8
-    };
-    let mut out = Vec::new();
-    let mut v = vec![0; count];
-    for i in 0..count {
-        set_to_min(i, &mut v);
-    }
-    loop {
-        out.push(&*arena.alloc_slice_copy(&v));
-        let increment_point = v[..count - 1]
-            .iter()
-            .enumerate()
-            .rev()
-            .find(|(i, x)| **x < max(*i, &v));
-        let Some((i, _)) = increment_point else {
-            return out;
-        };
-        v[i] += 1;
-        for i in i + 1..count {
-            set_to_min(i, &mut v);
+            (1..=size as i8 / n)
+                .flat_map(move |x| {
+                    [
+                        &*arena.alloc_slice_fill_iter([x, n * x]),
+                        &*arena.alloc_slice_fill_iter([n * x, x]),
+                    ]
+                })
+                .filter(|v| ctx.no_conflict(v))
+                .collect()
         }
     }
 }
@@ -224,22 +147,66 @@ fn multiplication_possibilities_bad(
     Box::new(out)
 }
 
-impl<'arena> JointPossibilities<'arena, '_> {
-    fn next(&mut self) -> Option<&'arena [i8]> {
-        'outer: for p in self.iter.by_ref() {
-            for ((i, x), ci) in p.iter().enumerate().zip(self.cells.iter()) {
-                for (y, cj) in p[i + 1..].iter().zip(self.cells[i + 1..].iter()) {
-                    if x == y
-                        && (ci / self.board_size == cj / self.board_size
-                            || ci % self.board_size == cj % self.board_size)
-                    {
-                        continue 'outer;
-                    }
+struct PossibilityContext<'a> {
+    size: usize,
+    count: usize,
+    cells: &'a [usize],
+}
+
+impl<'a> PossibilityContext<'a> {
+    fn no_conflict(&self, possibility: &[i8]) -> bool {
+        for ((i, x), ci) in possibility.iter().enumerate().zip(self.cells.iter()) {
+            for (y, cj) in possibility[i + 1..].iter().zip(self.cells[i + 1..].iter()) {
+                if x == y
+                    && (ci / self.size == cj / self.size || ci % self.size == cj % self.size)
+                {
+                    return false;
                 }
             }
-            return Some(p);
         }
-        None
+        true
+    }
+
+    fn addition_possibilities<'arena>(
+        &self,
+        arena: &'arena Bump,
+        target: i32,
+    ) -> Vec<&'arena [i8]> {
+        let set_to_min = |i: usize, v: &mut Vec<i8>| {
+            let remaining = target - v[..i].iter().map(|x| *x as i32).sum::<i32>();
+            let min = cmp::max(
+                1,
+                remaining - self.size as i32 * (self.count - 1 - i) as i32,
+            );
+            v[i] = min as i8;
+        };
+        let max = |i: usize, v: &Vec<i8>| -> i8 {
+            let remaining = target - v[..i].iter().map(|x| *x as i32).sum::<i32>();
+            let max = cmp::min(self.size as i32, remaining - (self.count - 1 - i) as i32);
+            max as i8
+        };
+        let mut out = Vec::new();
+        let mut v = vec![0; self.count];
+        for i in 0..self.count {
+            set_to_min(i, &mut v);
+        }
+        loop {
+            if self.no_conflict(&v) {
+                out.push(&*arena.alloc_slice_copy(&v));
+            }
+            let increment_point = v[..self.count - 1]
+                .iter()
+                .enumerate()
+                .rev()
+                .find(|(i, x)| **x < max(*i, &v));
+            let Some((i, _)) = increment_point else {
+                return out;
+            };
+            v[i] += 1;
+            for i in i + 1..self.count {
+                set_to_min(i, &mut v);
+            }
+        }
     }
 }
 
@@ -680,7 +647,11 @@ mod tests {
             let mut expected = constraint_satisfying_values_brute(tc.constraint, tc.count, tc.size);
             prop_assume!(!expected.is_empty());
             let arena = Bump::new();
-            let mut actual :Vec<_>= constraint_satisfying_values(&arena, tc.constraint, tc.count, tc.size).collect();
+            // We don't want to test internal conflict checking, so we make cells that don't
+            // conflict.
+            prop_assume!(tc.size >= tc.count);
+            let cells : Vec<_> = (0..tc.count).map(|i| i * (tc.size + 1)).collect();
+            let mut actual :Vec<_>= constraint_satisfying_values(&arena, tc.constraint, &cells, tc.size);
             expected.sort();
             actual.sort();
             assert_eq!(expected, actual);
