@@ -3,6 +3,7 @@
 mod bitset;
 mod compatibility_search;
 mod exclude_n_in_n;
+mod factorization;
 pub mod game;
 mod must_be_in_block;
 mod only_in_block;

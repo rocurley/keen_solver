@@ -12,7 +12,10 @@ use pest::Parser;
 use pest_derive::Parser;
 use union_find::{QuickUnionUf, UnionByRank, UnionFind};
 
-use crate::delete_from_vector;
+use crate::{
+    delete_from_vector,
+    factorization::{self, factorize, Factorization},
+};
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 enum Operator {
@@ -91,10 +94,7 @@ fn constraint_satisfying_values<'arena, 'a>(
     let ctx = PossibilityContext { size, count, cells };
     match constraint.op {
         Operator::Add => ctx.addition_possibilities(arena, constraint.val),
-        Operator::Mul => multiplication_possibilities_bad(size, count, count, constraint.val)
-            .filter(|v| ctx.no_conflict(v))
-            .map(|v| &*arena.alloc_slice_copy(&v))
-            .collect(),
+        Operator::Mul => ctx.multiplication_possibilities(arena, constraint.val),
         Operator::Sub => {
             let n = constraint.val as i8;
             (1..=size as i8 - n)
@@ -208,6 +208,124 @@ impl<'a> PossibilityContext<'a> {
             }
         }
     }
+
+    fn multiplication_possibilities<'arena>(
+        &self,
+        arena: &'arena Bump,
+        target: i32,
+    ) -> Vec<&'arena [i8]> {
+        let target = factorize(target);
+        let mut by_rank = vec![Vec::new(); 5];
+        let mut out = Vec::new();
+        for x in 1..self.size as i32 {
+            let f = factorize(x);
+            let slot = &mut by_rank[f.rank()];
+            slot.push((x, f));
+        }
+        let mut v = vec![
+            Foo {
+                rank: 4,
+                i: 0,
+                val: 1,
+                factorization: factorization::ONE,
+            };
+            self.count
+        ];
+        let reset_range = |start, v: &mut [Foo]| {
+            let mut required = target / v[..start].iter().map(|x| x.factorization).product();
+            for i in start..self.count - 1 {
+                let rank = required.rank();
+                let rank_ix = if i > 0 && v[i - 1].rank == rank {
+                    v[i - 1].i
+                } else {
+                    0
+                };
+                let (val, factorization) = by_rank[rank][rank_ix];
+                v[i] = Foo {
+                    rank,
+                    i: 0,
+                    val,
+                    factorization,
+                };
+                required /= factorization;
+            }
+            let remainder = required.product();
+            v[self.count - 1] = Foo {
+                val: remainder,
+                // Garbage values, we won't use them later
+                rank: 0,
+                i: 0,
+                factorization: required,
+            };
+            (1..=self.size as i32).contains(&remainder)
+        };
+        if reset_range(0, &mut v) {
+            self.permutations(arena, &v, &mut out);
+        }
+        loop {
+            let increment_point = v[..self.count - 1]
+                .iter()
+                .enumerate()
+                .rev()
+                .find(|(_, x)| x.i < by_rank[x.rank].len() - 1);
+            let Some((i, _)) = increment_point else {
+                break;
+            };
+            v[i].i += 1;
+            v[i].val = by_rank[v[i].rank][v[i].i].0;
+            if reset_range(i + 1, &mut v) {
+                self.permutations(arena, &v, &mut out);
+            }
+        }
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    fn permutations<'arena>(
+        &self,
+        arena: &'arena Bump,
+        v: &[Foo],
+        out: &mut Vec<&'arena [i8]>,
+    ) {
+        let mut v: Vec<_> = v.iter().map(|x| x.val as i8).collect();
+        out.reserve((1..=v.len()).product());
+        self.permutations_inner(arena, &mut v, out, 0);
+    }
+
+    fn permutations_inner<'arena>(
+        &self,
+        arena: &'arena Bump,
+        v: &mut [i8],
+        out: &mut Vec<&'arena [i8]>,
+        depth: usize,
+    ) {
+        if depth == v.len() {
+            if self.no_conflict(&*v) {
+                out.push(arena.alloc_slice_copy(&*v));
+            }
+            return;
+        }
+        self.permutations_inner(arena, v, out, depth + 1);
+        for i in depth + 1..v.len() {
+            swap_slice(depth, i, v);
+            self.permutations_inner(arena, v, out, depth);
+            swap_slice(depth, i, v);
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Foo {
+    rank: usize,
+    i: usize,
+    val: i32,
+    factorization: Factorization,
+}
+
+fn swap_slice<T>(i: usize, j: usize, v: &mut [T]) {
+    let (l, r) = v.split_at_mut(i + 1);
+    std::mem::swap(&mut l[i], &mut r[j - i]);
 }
 
 #[derive(Debug, Clone)]
