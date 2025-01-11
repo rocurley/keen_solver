@@ -240,7 +240,7 @@ impl<'a> PossibilityContext<'a> {
                 } else {
                     0
                 };
-                assert!(
+                debug_assert!(
                     rank_ix < by_rank[rank].len(),
                     "by_rank: {:?}\nrequired:{:?}\nrank:{}\nsize:{}",
                     by_rank,
@@ -251,7 +251,7 @@ impl<'a> PossibilityContext<'a> {
                 let (val, factorization) = by_rank[rank][rank_ix];
                 v[i] = Foo {
                     rank,
-                    i: 0,
+                    i: rank_ix,
                     val,
                     factorization,
                 };
@@ -261,19 +261,27 @@ impl<'a> PossibilityContext<'a> {
                 return false;
             }
             let remainder = required.product();
+            let rank = required.rank();
             v[self.count - 1] = Foo {
                 val: remainder,
-                // Garbage values, we won't use them later
-                rank: 0,
-                i: 0,
+                rank,
                 factorization: required,
+                // Garbage value, we won't use it later
+                i: 0,
             };
-            (1..=self.size as i32).contains(&remainder)
+            let prior = v[self.count - 2];
+            // Normally we compare by i instead of val, but val is monotonic in i so this works
+            // too.
+            ((prior.rank, prior.val) <= (rank, remainder))
+                && (1..=self.size as i32).contains(&remainder)
         };
         if reset_range(0, &mut v) {
             self.permutations(arena, &v, &mut out);
         }
         loop {
+            debug_assert!(v[..self.count - 1]
+                .iter()
+                .all(|x| by_rank[x.rank][x.i].0 == x.val));
             let increment_point = v[..self.count - 1]
                 .iter()
                 .enumerate()
@@ -296,7 +304,6 @@ impl<'a> PossibilityContext<'a> {
                 self.permutations(arena, &v, &mut out);
             }
         }
-        out.sort();
         out.dedup();
         out
     }
@@ -307,9 +314,16 @@ impl<'a> PossibilityContext<'a> {
         v: &[Foo],
         out: &mut Vec<&'arena [i8]>,
     ) {
+        let start = out.len();
         let mut v: Vec<_> = v.iter().map(|x| x.val as i8).collect();
         out.reserve((1..=v.len()).product());
         self.permutations_inner(arena, &mut v, out, 0);
+        // Duplicates will be adjacent
+        let has_duplicates = v.windows(2).any(|window| window[0] == window[1]);
+        // Prepare for a dedup step at the end
+        if has_duplicates {
+            out[start..].sort_unstable()
+        }
     }
 
     fn permutations_inner<'arena>(
