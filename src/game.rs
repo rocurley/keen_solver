@@ -217,7 +217,7 @@ impl<'a> PossibilityContext<'a> {
         let target = factorize(target);
         let mut by_rank = vec![Vec::new(); 5];
         let mut out = Vec::new();
-        for x in 1..self.size as i32 {
+        for x in 1..=self.size as i32 {
             let f = factorize(x);
             let slot = &mut by_rank[f.rank()];
             slot.push((x, f));
@@ -240,6 +240,14 @@ impl<'a> PossibilityContext<'a> {
                 } else {
                     0
                 };
+                assert!(
+                    rank_ix < by_rank[rank].len(),
+                    "by_rank: {:?}\nrequired:{:?}\nrank:{}\nsize:{}",
+                    by_rank,
+                    required,
+                    rank,
+                    self.size,
+                );
                 let (val, factorization) = by_rank[rank][rank_ix];
                 v[i] = Foo {
                     rank,
@@ -309,7 +317,7 @@ impl<'a> PossibilityContext<'a> {
         self.permutations_inner(arena, v, out, depth + 1);
         for i in depth + 1..v.len() {
             swap_slice(depth, i, v);
-            self.permutations_inner(arena, v, out, depth);
+            self.permutations_inner(arena, v, out, depth + 1);
             swap_slice(depth, i, v);
         }
     }
@@ -325,7 +333,7 @@ struct Foo {
 
 fn swap_slice<T>(i: usize, j: usize, v: &mut [T]) {
     let (l, r) = v.split_at_mut(i + 1);
-    std::mem::swap(&mut l[i], &mut r[j - i]);
+    std::mem::swap(&mut l[i], &mut r[j - i - 1]);
 }
 
 #[derive(Debug, Clone)]
@@ -693,9 +701,13 @@ pub fn parse_game_id<'arena>(arena: &'arena Bump, raw: &'_ str) -> GameState<'ar
 
 #[cfg(test)]
 mod tests {
+    use std::array;
+
     use super::{constraint_satisfying_values, Constraint, Operator};
     use bumpalo::Bump;
+    use prop::collection::vec;
     use proptest::prelude::*;
+    use proptest::test_runner::Config;
 
     fn next_values_list(board_size: usize, xs: &mut [i8]) -> bool {
         let board_size = board_size as i8;
@@ -727,7 +739,7 @@ mod tests {
 
     fn any_op() -> impl Strategy<Value = Operator> {
         use Operator::*;
-        prop_oneof![Just(Add), Just(Mul), Just(Sub), Just(Div),]
+        prop_oneof![Just(Add), Just(Mul), Just(Sub), Just(Div),].no_shrink()
     }
 
     #[derive(Clone, Debug)]
@@ -744,19 +756,36 @@ mod tests {
             Add | Mul => Strategy::boxed(2usize..6),
         }
     }
-    fn val(op: Operator, size: usize) -> BoxedStrategy<i32> {
+    fn val(op: Operator, size: usize, count: usize) -> BoxedStrategy<i32> {
         use Operator::*;
         match op {
-            Add | Mul => Strategy::boxed(1i32..500),
+            Add => Strategy::boxed(count as i32..(count * size) as i32),
+            Mul => Strategy::boxed(
+                vec(1..=size as i32, count).prop_map(|v| v.into_iter().product()),
+            ),
             Sub => Strategy::boxed(1..(size as i32 - 1)),
             Div => Strategy::boxed(2..size as i32),
         }
     }
+    /*
     prop_compose! {
         fn test_case()(size in 4usize..9, op in any_op())
             (count in count(op), op in Just(op), size in Just(size),val in val(op, size)) -> TestCase {
             TestCase{size, count, constraint: Constraint{val, op}}
         }
+    }
+    */
+
+    fn test_case() -> impl Strategy<Value = TestCase> {
+        (4usize..9, any_op()).prop_flat_map(|(size, op)| {
+            count(op).prop_flat_map(move |count| {
+                val(op, size, count).prop_map(move |val| TestCase {
+                    size,
+                    count,
+                    constraint: Constraint { val, op },
+                })
+            })
+        })
     }
 
     proptest! {
