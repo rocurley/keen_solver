@@ -257,6 +257,9 @@ impl<'a> PossibilityContext<'a> {
                 };
                 required /= factorization;
             }
+            if !required.is_whole() {
+                return false;
+            }
             let remainder = required.product();
             v[self.count - 1] = Foo {
                 val: remainder,
@@ -280,7 +283,15 @@ impl<'a> PossibilityContext<'a> {
                 break;
             };
             v[i].i += 1;
-            v[i].val = by_rank[v[i].rank][v[i].i].0;
+            (v[i].val, v[i].factorization) = by_rank[v[i].rank][v[i].i];
+            if !(v[..=i]
+                .iter()
+                .map(|x| x.factorization)
+                .product::<Factorization>()
+                .divides(target))
+            {
+                continue;
+            }
             if reset_range(i + 1, &mut v) {
                 self.permutations(arena, &v, &mut out);
             }
@@ -767,14 +778,6 @@ mod tests {
             Div => Strategy::boxed(2..size as i32),
         }
     }
-    /*
-    prop_compose! {
-        fn test_case()(size in 4usize..9, op in any_op())
-            (count in count(op), op in Just(op), size in Just(size),val in val(op, size)) -> TestCase {
-            TestCase{size, count, constraint: Constraint{val, op}}
-        }
-    }
-    */
 
     fn test_case() -> impl Strategy<Value = TestCase> {
         (4usize..9, any_op()).prop_flat_map(|(size, op)| {
