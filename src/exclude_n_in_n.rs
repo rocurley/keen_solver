@@ -7,7 +7,7 @@ use std::{
 const LANES: usize = 8;
 const ZERO: Simd<Bitmask, { LANES }> = Simd::from_array([0; LANES]);
 
-impl<'arena> GameState<'arena> {
+impl GameState<'_> {
     fn exclude_n_in_n_eligible(&mut self, y: usize, transposed: bool) -> &mut bool {
         if transposed {
             &mut self.cols_exclude_n_in_n_eligible[y]

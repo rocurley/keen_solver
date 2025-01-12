@@ -53,7 +53,7 @@ fn delete_from_vector<T>(xs: &mut Vec<T>, mut iter: impl Iterator<Item = usize>)
     xs.truncate(dst);
 }
 
-impl<'arena> GameState<'arena> {
+impl GameState<'_> {
     pub fn write_save(&self, mut out: impl Write) {
         let mut write = |key, value: &str| {
             writeln!(out, "{}:{}:{}", key, value.len(), value).unwrap();

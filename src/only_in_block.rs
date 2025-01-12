@@ -27,7 +27,7 @@ where
     }
 }
 
-impl<'arena> GameState<'arena> {
+impl GameState<'_> {
     fn only_in_block_eligilble(&mut self, y: usize, transposed: bool) -> &mut bool {
         if transposed {
             &mut self.cols_only_in_block_eligible[y]

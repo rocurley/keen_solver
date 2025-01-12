@@ -1,11 +1,4 @@
-use std::{
-    cmp,
-    collections::HashMap,
-    fmt::Debug,
-    iter::{empty, once, zip},
-    simd::Simd,
-    usize,
-};
+use std::{cmp, collections::HashMap, fmt::Debug, iter::zip, simd::Simd};
 
 use bumpalo::Bump;
 use pest::Parser;
@@ -32,6 +25,7 @@ pub struct Constraint {
 }
 
 impl Constraint {
+    #[cfg(test)]
     fn satisfied_by(self, v: &[i8]) -> bool {
         match self.op {
             Operator::Add => v.iter().map(|x| *x as i32).sum::<i32>() == self.val,
@@ -84,10 +78,10 @@ impl<'arena> BlockInfo<'arena> {
 }
 
 // TODO: maybe return a vec?
-fn constraint_satisfying_values<'arena, 'a>(
+fn constraint_satisfying_values<'arena>(
     arena: &'arena Bump,
     constraint: Constraint,
-    cells: &'a [usize],
+    cells: &[usize],
     size: usize,
 ) -> Vec<&'arena [i8]> {
     let count = cells.len();
@@ -122,38 +116,13 @@ fn constraint_satisfying_values<'arena, 'a>(
     }
 }
 
-fn multiplication_possibilities_bad(
-    size: usize,
-    count: usize,
-    remaining_count: usize,
-    target: i32,
-) -> Box<dyn Iterator<Item = Vec<i8>>> {
-    if (size as i32).pow(remaining_count as u32) < target {
-        return Box::new(empty());
-    }
-    if remaining_count == 1 {
-        return Box::new(once(vec![target as i8]));
-    }
-    let divisors = (1..=size as i32).filter(move |x| target % x == 0);
-    let out = divisors.flat_map(move |x| {
-        let new_target = target / x;
-        multiplication_possibilities_bad(size, count, remaining_count - 1, new_target).map(
-            move |mut xs| {
-                xs.push(x as i8);
-                xs
-            },
-        )
-    });
-    Box::new(out)
-}
-
 struct PossibilityContext<'a> {
     size: usize,
     count: usize,
     cells: &'a [usize],
 }
 
-impl<'a> PossibilityContext<'a> {
+impl PossibilityContext<'_> {
     fn no_conflict(&self, possibility: &[i8]) -> bool {
         for ((i, x), ci) in possibility.iter().enumerate().zip(self.cells.iter()) {
             for (y, cj) in possibility[i + 1..].iter().zip(self.cells[i + 1..].iter()) {
@@ -375,7 +344,7 @@ pub struct GameState<'arena> {
     col_idx: Simd<usize, 8>,
 }
 
-impl<'arena> PartialEq for GameState<'arena> {
+impl PartialEq for GameState<'_> {
     fn eq(&self, other: &Self) -> bool {
         self.desc == other.desc
             && self.size == other.size
@@ -389,7 +358,7 @@ impl<'arena> PartialEq for GameState<'arena> {
             && self.col_idx == other.col_idx
     }
 }
-impl<'arena> Eq for GameState<'arena> {}
+impl Eq for GameState<'_> {}
 
 pub struct RowCopy {
     y: usize,
@@ -726,13 +695,11 @@ pub fn parse_game_id<'arena>(arena: &'arena Bump, raw: &'_ str) -> GameState<'ar
 
 #[cfg(test)]
 mod tests {
-    use std::array;
 
     use super::{constraint_satisfying_values, Constraint, Operator};
     use bumpalo::Bump;
     use prop::collection::vec;
     use proptest::prelude::*;
-    use proptest::test_runner::Config;
 
     fn next_values_list(board_size: usize, xs: &mut [i8]) -> bool {
         let board_size = board_size as i8;

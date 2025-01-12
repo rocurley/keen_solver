@@ -1,6 +1,6 @@
 use crate::game::GameState;
 
-impl<'arena> GameState<'arena> {
+impl GameState<'_> {
     pub fn compatibility_search(&mut self) -> bool {
         let mut made_progress = false;
         for block_id in 0..self.blocks.len() {
