@@ -749,7 +749,9 @@ pub fn parse_game_id<'arena>(arena: &'arena Bump, raw: &'_ str) -> GameState<'ar
 #[cfg(test)]
 mod tests {
 
-    use super::{constraint_satisfying_values, Constraint, Operator};
+    use std::{cmp::max, collections::HashSet, iter::zip};
+
+    use super::{constraint_satisfying_values, CellMasks, Constraint, Operator};
     use bumpalo::Bump;
     use prop::collection::vec;
     use proptest::prelude::*;
@@ -842,6 +844,78 @@ mod tests {
             let mut actual :Vec<_>= constraint_satisfying_values(&arena, tc.constraint, &cells, tc.size);
             expected.sort();
             actual.sort();
+            assert_eq!(expected, actual);
+        }
+    }
+    #[derive(Copy, Clone, Debug)]
+    enum Direction {
+        Up,
+        Down,
+        Left,
+        Right,
+    }
+    impl Direction {
+        fn any() -> impl Strategy<Value = Direction> {
+            prop_oneof![
+                Just(Direction::Up),
+                Just(Direction::Down),
+                Just(Direction::Left),
+                Just(Direction::Right),
+            ]
+        }
+    }
+    fn block_from_directions(directions: Vec<Direction>) -> (usize, Vec<usize>) {
+        let mut coords = vec![(0, 0)];
+        for d in directions {
+            let (x0, y0) = *coords.last().unwrap();
+            let new = match d {
+                Direction::Up => (x0, y0 - 1),
+                Direction::Down => (x0, y0 + 1),
+                Direction::Left => (x0 - 1, y0),
+                Direction::Right => (x0 + 1, y0),
+            };
+            coords.push(new);
+        }
+        let xmin = coords.iter().map(|(x, _)| *x).min().unwrap();
+        let xmax = coords.iter().map(|(x, _)| *x).max().unwrap();
+        let ymin = coords.iter().map(|(_, y)| *y).min().unwrap();
+        let ymax = coords.iter().map(|(_, y)| *y).max().unwrap();
+        let size = max(xmax - xmin, ymax - ymin) as usize + 1;
+        let mut ixs: Vec<_> = coords
+            .into_iter()
+            .map(|(x, y)| ((x - xmin) + size as i32 * (y - ymin)) as usize)
+            .collect();
+        ixs.sort_unstable();
+        ixs.dedup();
+        (size, ixs)
+    }
+    fn block_strategy() -> impl Strategy<Value = (usize, Vec<usize>, Vec<i8>)> {
+        vec(Direction::any(), 1..8).prop_flat_map(|directions| {
+            let (size, cells) = block_from_directions(directions);
+            vec(1..=size as i8, cells.len())
+                .prop_map(move |values| (size, cells.clone(), values))
+        })
+    }
+
+    fn no_conflict_simple(size: usize, cells: &[usize], elements: &[i8]) -> bool {
+        let mut rows = HashSet::new();
+        let mut cols = HashSet::new();
+        for (&i, &val) in zip(cells, elements) {
+            let x = i % size;
+            let y = i / size;
+            if !rows.insert((y, val)) || !cols.insert((x, val)) {
+                return false;
+            }
+        }
+        true
+    }
+
+    proptest! {
+        #[test]
+        fn test_cell_masks((size, cells, elements) in block_strategy()) {
+            let expected = no_conflict_simple(size, &cells, &elements);
+            let masks = CellMasks::new(size, &cells);
+            let actual = masks.no_conflict(&elements);
             assert_eq!(expected, actual);
         }
     }
