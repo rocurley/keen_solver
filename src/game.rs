@@ -1,4 +1,11 @@
-use std::{cmp, collections::HashMap, fmt::Debug, iter::zip, simd::Simd};
+use std::{
+    cmp,
+    collections::HashMap,
+    fmt::Debug,
+    iter::zip,
+    ops::{BitAnd, BitOr},
+    simd::{cmp::SimdPartialEq, LaneCount, Simd, SupportedLaneCount},
+};
 
 use bumpalo::Bump;
 use pest::Parser;
@@ -8,7 +15,7 @@ use union_find::{QuickUnionUf, UnionByRank, UnionFind};
 use crate::{
     delete_from_vector,
     factorization::{self, factorize, Factorization},
-    permutation::{permute, visit_unique_permutations},
+    permutation::{permute, visit_lexical_permutations, visit_unique_permutations},
 };
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -86,7 +93,7 @@ fn constraint_satisfying_values<'arena>(
     size: usize,
 ) -> Vec<&'arena [i8]> {
     let count = cells.len();
-    let ctx = PossibilityContext { size, count, cells };
+    let ctx = PossibilityContext::new(size, count, cells);
     match constraint.op {
         Operator::Add => ctx.addition_possibilities(arena, constraint.val),
         Operator::Mul => ctx.multiplication_possibilities(arena, constraint.val),
@@ -121,20 +128,21 @@ struct PossibilityContext<'a> {
     size: usize,
     count: usize,
     cells: &'a [usize],
+    masks: CellMasks,
 }
 
-impl PossibilityContext<'_> {
-    fn no_conflict(&self, possibility: &[i8]) -> bool {
-        for ((i, x), ci) in possibility.iter().enumerate().zip(self.cells.iter()) {
-            for (y, cj) in possibility[i + 1..].iter().zip(self.cells[i + 1..].iter()) {
-                if x == y
-                    && (ci / self.size == cj / self.size || ci % self.size == cj % self.size)
-                {
-                    return false;
-                }
-            }
+impl<'a> PossibilityContext<'a> {
+    fn new(size: usize, count: usize, cells: &'a [usize]) -> Self {
+        let masks = CellMasks::new(size, cells);
+        PossibilityContext {
+            size,
+            count,
+            cells,
+            masks,
         }
-        true
+    }
+    fn no_conflict(&self, possibility: &[i8]) -> bool {
+        self.masks.no_conflict(possibility)
     }
 
     fn addition_possibilities<'arena>(
@@ -283,14 +291,82 @@ impl PossibilityContext<'_> {
         v: &[Foo],
         out: &mut Vec<&'arena [i8]>,
     ) {
-        let v: Vec<i8> = v.iter().map(|x| x.val as i8).collect();
-        let visit = |perm: &[usize]| {
-            let permuted = permute(&v, perm);
-            if self.no_conflict(&permuted) {
-                out.push(&*arena.alloc_slice_copy(&permuted));
+        let mut v: Vec<i8> = v.iter().map(|x| x.val as i8).collect();
+        out.reserve((1..=v.len()).product());
+        let visit = |perm: &[i8]| {
+            if self.no_conflict(&perm) {
+                out.push(&*arena.alloc_slice_copy(&perm));
             }
         };
-        visit_unique_permutations(&v, visit);
+        visit_lexical_permutations(&mut v, visit);
+    }
+}
+
+struct CellMasksInner<const LANES: usize>
+where
+    LaneCount<LANES>: SupportedLaneCount,
+{
+    masks: Vec<Simd<u64, LANES>>,
+    size: usize,
+}
+
+impl<const LANES: usize> CellMasksInner<LANES>
+where
+    LaneCount<LANES>: SupportedLaneCount,
+{
+    fn new(size: usize, cells: &[usize]) -> Self {
+        let masks = cells
+            .iter()
+            .map(|&ix| {
+                let mut mask = Simd::<u64, LANES>::splat(0);
+                let i = (ix % size) * size;
+                mask.as_mut_array()[i / 64] |= 1 << (i % 64);
+                let i = (size + ix / size) * size;
+                mask.as_mut_array()[i / 64] |= 1 << (i % 64);
+                mask
+            })
+            .collect();
+        CellMasksInner { masks, size }
+    }
+    fn no_conflict(&self, v: &[i8]) -> bool {
+        let mut seen = Simd::splat(0);
+        for (x, mask) in zip(v, &self.masks) {
+            let mask = mask << (x - 1) as u64;
+            if (seen & mask).simd_ne(Simd::splat(0)).any() {
+                return false;
+            }
+            seen |= mask;
+        }
+        true
+    }
+}
+
+enum CellMasks {
+    Domino,
+    Lanes1(CellMasksInner<1>),
+    Lanes2(CellMasksInner<2>),
+    Lanes4(CellMasksInner<4>),
+}
+
+impl CellMasks {
+    fn new(size: usize, cells: &[usize]) -> Self {
+        if cells.len() == 2 {
+            return Self::Domino;
+        }
+        match 2 * size * size {
+            0..=64 => Self::Lanes1(CellMasksInner::new(size, cells)),
+            65..=128 => Self::Lanes2(CellMasksInner::new(size, cells)),
+            129..=256 => Self::Lanes4(CellMasksInner::new(size, cells)),
+            _ => panic!("Size {} larger than expected", size),
+        }
+    }
+    fn no_conflict(&self, v: &[i8]) -> bool {
+        match self {
+            CellMasks::Domino => v[0] != v[1],
+            CellMasks::Lanes1(inner) => inner.no_conflict(v),
+            CellMasks::Lanes2(inner) => inner.no_conflict(v),
+            CellMasks::Lanes4(inner) => inner.no_conflict(v),
+        }
     }
 }
 
@@ -754,9 +830,13 @@ mod tests {
         fn test_constraint_satisfying_values(tc in test_case()) {
             let mut expected = constraint_satisfying_values_brute(tc.constraint, tc.count, tc.size);
             prop_assume!(!expected.is_empty());
+            // We can't disable conflict checking for count = 2, so filter by count here.
+            if tc.count == 2 {
+                expected.retain(|v| v[0] != v[1]);
+            }
             let arena = Bump::new();
-            // We don't want to test internal conflict checking, so we make cells that don't
-            // conflict.
+            // For count > 2, we don't want to test internal conflict checking, so we make cells
+            // that don't conflict.
             prop_assume!(tc.size >= tc.count);
             let cells : Vec<_> = (0..tc.count).map(|i| i * (tc.size + 1)).collect();
             let mut actual :Vec<_>= constraint_satisfying_values(&arena, tc.constraint, &cells, tc.size);

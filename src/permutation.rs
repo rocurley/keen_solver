@@ -83,6 +83,39 @@ fn plain_changes<T: Copy>(v: &[T]) -> Vec<Vec<T>> {
     out
 }
 
+pub fn visit_lexical_permutations<T: Ord>(v: &mut [T], mut visit: impl FnMut(&[T])) {
+    v.sort_unstable();
+    loop {
+        visit(&*v);
+        let Some((j, _)) = v
+            .windows(2)
+            .enumerate()
+            .rev()
+            .find(|(_, window)| window[0] < window[1])
+        else {
+            return;
+        };
+        let (l, _) = v
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, x)| **x > v[j])
+            .unwrap();
+        v.swap(j, l);
+        v[j + 1..].reverse();
+    }
+}
+
+fn lexical_permutations<T: Copy + Ord>(mut v: Vec<T>) -> Vec<Vec<T>> {
+    let mut out = Vec::new();
+    let out_mut = &mut out;
+    let visit = move |v: &[T]| {
+        out_mut.push(v.to_vec());
+    };
+    visit_lexical_permutations(&mut v, visit);
+    out
+}
+
 pub fn permute<T: Copy>(v: &[T], perm: &[usize]) -> Vec<T> {
     let mut out = v.to_vec();
     for (i, &x) in perm.iter().enumerate() {
@@ -121,6 +154,8 @@ fn permutations_inner<'arena>(v: &mut [i8], out: &mut Vec<Vec<i8>>, depth: usize
 #[cfg(test)]
 mod test {
 
+    use crate::permutation::lexical_permutations;
+
     use super::{permutations, plain_changes, unique_permutations};
 
     #[test]
@@ -146,6 +181,25 @@ mod test {
     fn test_unique_permutations() {
         let v: Vec<_> = vec![0, 1, 1, 2, 3, 4, 4];
         let mut actual = unique_permutations(&v);
+        for (i, permutation) in actual.iter().enumerate() {
+            let mut sorted = permutation.clone();
+            sorted.sort();
+            assert_eq!(
+                v, sorted,
+                "{:?} (#{}) is not a permutation of {:?}",
+                permutation, i, v
+            );
+        }
+        let mut expected = permutations(&v);
+        actual.sort();
+        expected.sort();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn test_lexical_permutations() {
+        let v: Vec<_> = vec![0, 1, 1, 2, 3, 4, 4];
+        let mut actual = lexical_permutations(v.clone());
         for (i, permutation) in actual.iter().enumerate() {
             let mut sorted = permutation.clone();
             sorted.sort();
