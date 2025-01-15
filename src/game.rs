@@ -3,7 +3,6 @@ use std::{
     collections::HashMap,
     fmt::Debug,
     iter::zip,
-    ops::{BitAnd, BitOr},
     simd::{cmp::SimdPartialEq, LaneCount, Simd, SupportedLaneCount},
 };
 
@@ -15,7 +14,7 @@ use union_find::{QuickUnionUf, UnionByRank, UnionFind};
 use crate::{
     delete_from_vector,
     factorization::{self, factorize, Factorization},
-    permutation::{permute, visit_lexical_permutations, visit_unique_permutations},
+    permutation::visit_lexical_permutations,
 };
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -124,22 +123,16 @@ fn constraint_satisfying_values<'arena>(
     }
 }
 
-struct PossibilityContext<'a> {
+struct PossibilityContext {
     size: usize,
     count: usize,
-    cells: &'a [usize],
     masks: CellMasks,
 }
 
-impl<'a> PossibilityContext<'a> {
-    fn new(size: usize, count: usize, cells: &'a [usize]) -> Self {
+impl PossibilityContext {
+    fn new(size: usize, count: usize, cells: &[usize]) -> Self {
         let masks = CellMasks::new(size, cells);
-        PossibilityContext {
-            size,
-            count,
-            cells,
-            masks,
-        }
+        PossibilityContext { size, count, masks }
     }
     fn no_conflict(&self, possibility: &[i8]) -> bool {
         self.masks.no_conflict(possibility)
@@ -201,7 +194,7 @@ impl<'a> PossibilityContext<'a> {
             slot.push((x, f));
         }
         let mut v = vec![
-            Foo {
+            ProductPossibility {
                 rank: 4,
                 i: 0,
                 val: 1,
@@ -209,7 +202,7 @@ impl<'a> PossibilityContext<'a> {
             };
             self.count
         ];
-        let reset_range = |start, v: &mut [Foo]| {
+        let reset_range = |start, v: &mut [ProductPossibility]| {
             let mut required = target / v[..start].iter().map(|x| x.factorization).product();
             for i in start..self.count - 1 {
                 let rank = required.rank();
@@ -227,7 +220,7 @@ impl<'a> PossibilityContext<'a> {
                     self.size,
                 );
                 let (val, factorization) = by_rank[rank][rank_ix];
-                v[i] = Foo {
+                v[i] = ProductPossibility {
                     rank,
                     i: rank_ix,
                     val,
@@ -240,7 +233,7 @@ impl<'a> PossibilityContext<'a> {
             }
             let remainder = required.product();
             let rank = required.rank();
-            v[self.count - 1] = Foo {
+            v[self.count - 1] = ProductPossibility {
                 val: remainder,
                 rank,
                 factorization: required,
@@ -288,14 +281,14 @@ impl<'a> PossibilityContext<'a> {
     fn write_permutations<'arena>(
         &self,
         arena: &'arena Bump,
-        v: &[Foo],
+        v: &[ProductPossibility],
         out: &mut Vec<&'arena [i8]>,
     ) {
         let mut v: Vec<i8> = v.iter().map(|x| x.val as i8).collect();
         out.reserve((1..=v.len()).product());
         let visit = |perm: &[i8]| {
-            if self.no_conflict(&perm) {
-                out.push(&*arena.alloc_slice_copy(&perm));
+            if self.no_conflict(perm) {
+                out.push(&*arena.alloc_slice_copy(perm));
             }
         };
         visit_lexical_permutations(&mut v, visit);
@@ -307,7 +300,6 @@ where
     LaneCount<LANES>: SupportedLaneCount,
 {
     masks: Vec<Simd<u64, LANES>>,
-    size: usize,
 }
 
 impl<const LANES: usize> CellMasksInner<LANES>
@@ -326,7 +318,7 @@ where
                 mask
             })
             .collect();
-        CellMasksInner { masks, size }
+        CellMasksInner { masks }
     }
     fn no_conflict(&self, v: &[i8]) -> bool {
         let mut seen = Simd::splat(0);
@@ -371,16 +363,11 @@ impl CellMasks {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct Foo {
+struct ProductPossibility {
     rank: usize,
     i: usize,
     val: i32,
     factorization: Factorization,
-}
-
-fn swap_slice<T>(i: usize, j: usize, v: &mut [T]) {
-    let (l, r) = v.split_at_mut(i + 1);
-    std::mem::swap(&mut l[i], &mut r[j - i - 1]);
 }
 
 #[derive(Debug, Clone)]

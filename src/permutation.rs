@@ -1,3 +1,4 @@
+#[cfg(test)]
 pub fn visit_unique_permutations<T: Copy + Eq>(v: &[T], mut visit: impl FnMut(&[usize])) {
     let mut perm: Vec<_> = (0..v.len()).collect();
     let mut perm_inv: Vec<_> = (0..v.len()).collect();
@@ -30,6 +31,7 @@ pub fn visit_unique_permutations<T: Copy + Eq>(v: &[T], mut visit: impl FnMut(&[
     }
 }
 
+#[cfg(test)]
 pub fn unique_permutations<T: Copy + Eq>(v: &[T]) -> Vec<Vec<T>> {
     let mut out = Vec::new();
     let out_mut = &mut out;
@@ -40,6 +42,7 @@ pub fn unique_permutations<T: Copy + Eq>(v: &[T]) -> Vec<Vec<T>> {
     out
 }
 
+#[cfg(test)]
 pub fn visit_plain_changes<T: Copy>(v: &[T], mut visit: impl FnMut(&[usize])) {
     let mut perm: Vec<_> = (0..v.len()).collect();
     let mut perm_inv: Vec<_> = (0..v.len()).collect();
@@ -73,6 +76,7 @@ pub fn visit_plain_changes<T: Copy>(v: &[T], mut visit: impl FnMut(&[usize])) {
     }
 }
 
+#[cfg(test)]
 fn plain_changes<T: Copy>(v: &[T]) -> Vec<Vec<T>> {
     let mut out = Vec::new();
     let out_mut = &mut out;
@@ -106,6 +110,7 @@ pub fn visit_lexical_permutations<T: Ord>(v: &mut [T], mut visit: impl FnMut(&[T
     }
 }
 
+#[cfg(test)]
 fn lexical_permutations<T: Copy + Ord>(mut v: Vec<T>) -> Vec<Vec<T>> {
     let mut out = Vec::new();
     let out_mut = &mut out;
@@ -116,6 +121,7 @@ fn lexical_permutations<T: Copy + Ord>(mut v: Vec<T>) -> Vec<Vec<T>> {
     out
 }
 
+#[cfg(test)]
 pub fn permute<T: Copy>(v: &[T], perm: &[usize]) -> Vec<T> {
     let mut out = v.to_vec();
     for (i, &x) in perm.iter().enumerate() {
@@ -124,11 +130,12 @@ pub fn permute<T: Copy>(v: &[T], perm: &[usize]) -> Vec<T> {
     out
 }
 
-fn permutations(v: &[i8]) -> Vec<Vec<i8>> {
+#[cfg(test)]
+fn recursive_permutations(v: &[i8]) -> Vec<Vec<i8>> {
     let mut out = Vec::new();
     let mut v: Vec<_> = v.to_vec();
     out.reserve((1..=v.len()).product());
-    permutations_inner(&mut v, &mut out, 0);
+    recursive_permutations_inner(&mut v, &mut out, 0);
     // Duplicates will be adjacent
     let has_duplicates = v.windows(2).any(|window| window[0] == window[1]);
     if has_duplicates {
@@ -138,15 +145,16 @@ fn permutations(v: &[i8]) -> Vec<Vec<i8>> {
     out
 }
 
-fn permutations_inner<'arena>(v: &mut [i8], out: &mut Vec<Vec<i8>>, depth: usize) {
+#[cfg(test)]
+fn recursive_permutations_inner(v: &mut [i8], out: &mut Vec<Vec<i8>>, depth: usize) {
     if depth == v.len() {
         out.push(v.to_vec());
         return;
     }
-    permutations_inner(v, out, depth + 1);
+    recursive_permutations_inner(v, out, depth + 1);
     for i in depth + 1..v.len() {
         v.swap(depth, i);
-        permutations_inner(v, out, depth + 1);
+        recursive_permutations_inner(v, out, depth + 1);
         v.swap(depth, i);
     }
 }
@@ -156,7 +164,7 @@ mod test {
 
     use crate::permutation::lexical_permutations;
 
-    use super::{permutations, plain_changes, unique_permutations};
+    use super::{plain_changes, recursive_permutations, unique_permutations};
 
     #[test]
     fn test_plain_changes() {
@@ -171,7 +179,7 @@ mod test {
                 permutation, i, v
             );
         }
-        let mut expected = permutations(&v);
+        let mut expected = recursive_permutations(&v);
         actual.sort();
         expected.sort();
         assert_eq!(expected, actual);
@@ -190,7 +198,7 @@ mod test {
                 permutation, i, v
             );
         }
-        let mut expected = permutations(&v);
+        let mut expected = recursive_permutations(&v);
         actual.sort();
         expected.sort();
         assert_eq!(expected, actual);
@@ -209,7 +217,7 @@ mod test {
                 permutation, i, v
             );
         }
-        let mut expected = permutations(&v);
+        let mut expected = recursive_permutations(&v);
         actual.sort();
         expected.sort();
         assert_eq!(expected, actual);
