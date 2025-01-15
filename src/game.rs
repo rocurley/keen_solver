@@ -73,9 +73,13 @@ pub struct BlockInfo<'arena> {
 }
 
 impl<'arena> BlockInfo<'arena> {
-    fn add_interacting(&mut self, ix: usize) {
-        if !self.interacting_blocks.contains(&ix) {
-            self.interacting_blocks.push(ix);
+    fn add_interacting(&mut self, mask: u64) {
+        self.interacting_blocks
+            .reserve_exact(mask.count_ones() as usize);
+        for i in 0..64 {
+            if (mask & (1 << i)) > 0 {
+                self.interacting_blocks.push(i);
+            }
         }
     }
     fn fill_in_possibilities(&mut self, arena: &'arena Bump, board_size: usize) {
@@ -696,21 +700,25 @@ pub fn parse_game_id<'arena>(arena: &'arena Bump, raw: &'_ str) -> GameState<'ar
         block_id,
         possibilities: vec![(2 << size) - 1; size * size],
     };
-    for (i, &block_id) in cells.block_id.iter().enumerate() {
-        let x = i % size;
-        let y = i / size;
-        for x2 in 0..size {
-            let other_block_id = cells.block_id[x2 + y * size];
-            if other_block_id != block_id {
-                blocks[block_id].add_interacting(other_block_id);
+    for (block_id, block) in blocks.iter_mut().enumerate() {
+        let mut mask = 0;
+        for &i in &block.cells {
+            let x = i % size;
+            let y = i / size;
+            for x2 in 0..size {
+                let other_block_id = cells.block_id[x2 + y * size];
+                if other_block_id != block_id {
+                    mask |= 1 << other_block_id;
+                }
+            }
+            for y2 in 0..size {
+                let other_block_id = cells.block_id[x + y2 * size];
+                if other_block_id != block_id {
+                    mask |= 1 << other_block_id;
+                }
             }
         }
-        for y2 in 0..size {
-            let other_block_id = cells.block_id[x + y2 * size];
-            if other_block_id != block_id {
-                blocks[block_id].add_interacting(other_block_id);
-            }
-        }
+        block.add_interacting(mask);
     }
     for block in blocks.iter_mut() {
         block.fill_in_possibilities(arena, size);
