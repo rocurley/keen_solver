@@ -40,14 +40,13 @@ pub fn unique_permutations<T: Copy + Eq>(v: &[T]) -> Vec<Vec<T>> {
     out
 }
 
-fn plain_changes<T: Copy>(v: &[T]) -> Vec<Vec<T>> {
+pub fn visit_plain_changes<T: Copy>(v: &[T], mut visit: impl FnMut(&[usize])) {
     let mut perm: Vec<_> = (0..v.len()).collect();
     let mut perm_inv: Vec<_> = (0..v.len()).collect();
     // perm[perm_inv[i]] == i
-    let mut out = Vec::new();
     let mut direction = vec![true; v.len()];
     loop {
-        out.push(permute(v, &perm));
+        visit(&perm);
         // value to move in perm
         let mut x = 0;
         loop {
@@ -68,10 +67,20 @@ fn plain_changes<T: Copy>(v: &[T]) -> Vec<Vec<T>> {
             direction[x] = !direction[x];
             x += 1;
             if x == v.len() {
-                return out;
+                return;
             }
         }
     }
+}
+
+fn plain_changes<T: Copy>(v: &[T]) -> Vec<Vec<T>> {
+    let mut out = Vec::new();
+    let out_mut = &mut out;
+    let visit = move |perm: &[usize]| {
+        out_mut.push(permute(v, perm));
+    };
+    visit_plain_changes(v, visit);
+    out
 }
 
 pub fn permute<T: Copy>(v: &[T], perm: &[usize]) -> Vec<T> {
