@@ -2,9 +2,8 @@ use std::{
     cmp,
     collections::HashMap,
     fmt::Debug,
-    iter::{empty, once, zip},
-    simd::Simd,
-    usize,
+    iter::zip,
+    simd::{cmp::SimdPartialEq, LaneCount, Simd, SupportedLaneCount},
 };
 
 use bumpalo::Bump;
@@ -12,7 +11,11 @@ use pest::Parser;
 use pest_derive::Parser;
 use union_find::{QuickUnionUf, UnionByRank, UnionFind};
 
-use crate::delete_from_vector;
+use crate::{
+    delete_from_vector,
+    factorization::{self, factorize, Factorization},
+    permutation::visit_lexical_permutations,
+};
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 enum Operator {
@@ -29,6 +32,7 @@ pub struct Constraint {
 }
 
 impl Constraint {
+    #[cfg(test)]
     fn satisfied_by(self, v: &[i8]) -> bool {
         match self.op {
             Operator::Add => v.iter().map(|x| *x as i32).sum::<i32>() == self.val,
@@ -81,20 +85,17 @@ impl<'arena> BlockInfo<'arena> {
 }
 
 // TODO: maybe return a vec?
-fn constraint_satisfying_values<'arena, 'a>(
+fn constraint_satisfying_values<'arena>(
     arena: &'arena Bump,
     constraint: Constraint,
-    cells: &'a [usize],
+    cells: &[usize],
     size: usize,
 ) -> Vec<&'arena [i8]> {
     let count = cells.len();
-    let ctx = PossibilityContext { size, count, cells };
+    let ctx = PossibilityContext::new(size, count, cells);
     match constraint.op {
         Operator::Add => ctx.addition_possibilities(arena, constraint.val),
-        Operator::Mul => multiplication_possibilities_bad(size, count, count, constraint.val)
-            .filter(|v| ctx.no_conflict(v))
-            .map(|v| &*arena.alloc_slice_copy(&v))
-            .collect(),
+        Operator::Mul => ctx.multiplication_possibilities(arena, constraint.val),
         Operator::Sub => {
             let n = constraint.val as i8;
             (1..=size as i8 - n)
@@ -122,49 +123,19 @@ fn constraint_satisfying_values<'arena, 'a>(
     }
 }
 
-fn multiplication_possibilities_bad(
+struct PossibilityContext {
     size: usize,
     count: usize,
-    remaining_count: usize,
-    target: i32,
-) -> Box<dyn Iterator<Item = Vec<i8>>> {
-    if (size as i32).pow(remaining_count as u32) < target {
-        return Box::new(empty());
-    }
-    if remaining_count == 1 {
-        return Box::new(once(vec![target as i8]));
-    }
-    let divisors = (1..=size as i32).filter(move |x| target % x == 0);
-    let out = divisors.flat_map(move |x| {
-        let new_target = target / x;
-        multiplication_possibilities_bad(size, count, remaining_count - 1, new_target).map(
-            move |mut xs| {
-                xs.push(x as i8);
-                xs
-            },
-        )
-    });
-    Box::new(out)
+    masks: CellMasks,
 }
 
-struct PossibilityContext<'a> {
-    size: usize,
-    count: usize,
-    cells: &'a [usize],
-}
-
-impl<'a> PossibilityContext<'a> {
+impl PossibilityContext {
+    fn new(size: usize, count: usize, cells: &[usize]) -> Self {
+        let masks = CellMasks::new(size, cells);
+        PossibilityContext { size, count, masks }
+    }
     fn no_conflict(&self, possibility: &[i8]) -> bool {
-        for ((i, x), ci) in possibility.iter().enumerate().zip(self.cells.iter()) {
-            for (y, cj) in possibility[i + 1..].iter().zip(self.cells[i + 1..].iter()) {
-                if x == y
-                    && (ci / self.size == cj / self.size || ci % self.size == cj % self.size)
-                {
-                    return false;
-                }
-            }
-        }
-        true
+        self.masks.no_conflict(possibility)
     }
 
     fn addition_possibilities<'arena>(
@@ -208,6 +179,195 @@ impl<'a> PossibilityContext<'a> {
             }
         }
     }
+
+    fn multiplication_possibilities<'arena>(
+        &self,
+        arena: &'arena Bump,
+        target: i32,
+    ) -> Vec<&'arena [i8]> {
+        let target = factorize(target);
+        let mut by_rank = vec![Vec::new(); 5];
+        let mut out = Vec::new();
+        for x in 1..=self.size as i32 {
+            let f = factorize(x);
+            let slot = &mut by_rank[f.rank()];
+            slot.push((x, f));
+        }
+        let mut v = vec![
+            ProductPossibility {
+                rank: 4,
+                i: 0,
+                val: 1,
+                factorization: factorization::ONE,
+            };
+            self.count
+        ];
+        let reset_range = |start, v: &mut [ProductPossibility]| {
+            let mut required = target / v[..start].iter().map(|x| x.factorization).product();
+            for i in start..self.count - 1 {
+                let rank = required.rank();
+                let rank_ix = if i > 0 && v[i - 1].rank == rank {
+                    v[i - 1].i
+                } else {
+                    0
+                };
+                debug_assert!(
+                    rank_ix < by_rank[rank].len(),
+                    "by_rank: {:?}\nrequired:{:?}\nrank:{}\nsize:{}",
+                    by_rank,
+                    required,
+                    rank,
+                    self.size,
+                );
+                let (val, factorization) = by_rank[rank][rank_ix];
+                v[i] = ProductPossibility {
+                    rank,
+                    i: rank_ix,
+                    val,
+                    factorization,
+                };
+                required /= factorization;
+            }
+            if !required.is_whole() {
+                return false;
+            }
+            let remainder = required.product();
+            let rank = required.rank();
+            v[self.count - 1] = ProductPossibility {
+                val: remainder,
+                rank,
+                factorization: required,
+                // Garbage value, we won't use it later
+                i: 0,
+            };
+            let prior = v[self.count - 2];
+            // Normally we compare by i instead of val, but val is monotonic in i so this works
+            // too.
+            ((prior.rank, prior.val) <= (rank, remainder))
+                && (1..=self.size as i32).contains(&remainder)
+        };
+        if reset_range(0, &mut v) {
+            self.write_permutations(arena, &v, &mut out);
+        }
+        loop {
+            debug_assert!(v[..self.count - 1]
+                .iter()
+                .all(|x| by_rank[x.rank][x.i].0 == x.val));
+            let increment_point = v[..self.count - 1]
+                .iter()
+                .enumerate()
+                .rev()
+                .find(|(_, x)| x.i < by_rank[x.rank].len() - 1);
+            let Some((i, _)) = increment_point else {
+                break;
+            };
+            v[i].i += 1;
+            (v[i].val, v[i].factorization) = by_rank[v[i].rank][v[i].i];
+            if !(v[..=i]
+                .iter()
+                .map(|x| x.factorization)
+                .product::<Factorization>()
+                .divides(target))
+            {
+                continue;
+            }
+            if reset_range(i + 1, &mut v) {
+                self.write_permutations(arena, &v, &mut out);
+            }
+        }
+        out
+    }
+
+    fn write_permutations<'arena>(
+        &self,
+        arena: &'arena Bump,
+        v: &[ProductPossibility],
+        out: &mut Vec<&'arena [i8]>,
+    ) {
+        let mut v: Vec<i8> = v.iter().map(|x| x.val as i8).collect();
+        out.reserve((1..=v.len()).product());
+        let visit = |perm: &[i8]| {
+            if self.no_conflict(perm) {
+                out.push(&*arena.alloc_slice_copy(perm));
+            }
+        };
+        visit_lexical_permutations(&mut v, visit);
+    }
+}
+
+struct CellMasksInner<const LANES: usize>
+where
+    LaneCount<LANES>: SupportedLaneCount,
+{
+    masks: Vec<Simd<u64, LANES>>,
+}
+
+impl<const LANES: usize> CellMasksInner<LANES>
+where
+    LaneCount<LANES>: SupportedLaneCount,
+{
+    fn new(size: usize, cells: &[usize]) -> Self {
+        let masks = cells
+            .iter()
+            .map(|&ix| {
+                let mut mask = Simd::<u64, LANES>::splat(0);
+                let i = (ix % size) * size;
+                mask.as_mut_array()[i / 64] |= 1 << (i % 64);
+                let i = (size + ix / size) * size;
+                mask.as_mut_array()[i / 64] |= 1 << (i % 64);
+                mask
+            })
+            .collect();
+        CellMasksInner { masks }
+    }
+    fn no_conflict(&self, v: &[i8]) -> bool {
+        let mut seen = Simd::splat(0);
+        for (x, mask) in zip(v, &self.masks) {
+            let mask = mask << (x - 1) as u64;
+            if (seen & mask).simd_ne(Simd::splat(0)).any() {
+                return false;
+            }
+            seen |= mask;
+        }
+        true
+    }
+}
+
+enum CellMasks {
+    Domino,
+    Lanes1(CellMasksInner<1>),
+    Lanes2(CellMasksInner<2>),
+    Lanes4(CellMasksInner<4>),
+}
+
+impl CellMasks {
+    fn new(size: usize, cells: &[usize]) -> Self {
+        if cells.len() == 2 {
+            return Self::Domino;
+        }
+        match 2 * size * size {
+            0..=64 => Self::Lanes1(CellMasksInner::new(size, cells)),
+            65..=128 => Self::Lanes2(CellMasksInner::new(size, cells)),
+            129..=256 => Self::Lanes4(CellMasksInner::new(size, cells)),
+            _ => panic!("Size {} larger than expected", size),
+        }
+    }
+    fn no_conflict(&self, v: &[i8]) -> bool {
+        match self {
+            CellMasks::Domino => v[0] != v[1],
+            CellMasks::Lanes1(inner) => inner.no_conflict(v),
+            CellMasks::Lanes2(inner) => inner.no_conflict(v),
+            CellMasks::Lanes4(inner) => inner.no_conflict(v),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ProductPossibility {
+    rank: usize,
+    i: usize,
+    val: i32,
+    factorization: Factorization,
 }
 
 #[derive(Debug, Clone)]
@@ -224,7 +384,7 @@ pub struct GameState<'arena> {
     col_idx: Simd<usize, 8>,
 }
 
-impl<'arena> PartialEq for GameState<'arena> {
+impl PartialEq for GameState<'_> {
     fn eq(&self, other: &Self) -> bool {
         self.desc == other.desc
             && self.size == other.size
@@ -238,7 +398,7 @@ impl<'arena> PartialEq for GameState<'arena> {
             && self.col_idx == other.col_idx
     }
 }
-impl<'arena> Eq for GameState<'arena> {}
+impl Eq for GameState<'_> {}
 
 pub struct RowCopy {
     y: usize,
@@ -575,8 +735,12 @@ pub fn parse_game_id<'arena>(arena: &'arena Bump, raw: &'_ str) -> GameState<'ar
 
 #[cfg(test)]
 mod tests {
-    use super::{constraint_satisfying_values, Constraint, Operator};
+
+    use std::{cmp::max, collections::HashSet, iter::zip};
+
+    use super::{constraint_satisfying_values, CellMasks, Constraint, Operator};
     use bumpalo::Bump;
+    use prop::collection::vec;
     use proptest::prelude::*;
 
     fn next_values_list(board_size: usize, xs: &mut [i8]) -> bool {
@@ -609,7 +773,7 @@ mod tests {
 
     fn any_op() -> impl Strategy<Value = Operator> {
         use Operator::*;
-        prop_oneof![Just(Add), Just(Mul), Just(Sub), Just(Div),]
+        prop_oneof![Just(Add), Just(Mul), Just(Sub), Just(Div),].no_shrink()
     }
 
     #[derive(Clone, Debug)]
@@ -626,19 +790,28 @@ mod tests {
             Add | Mul => Strategy::boxed(2usize..6),
         }
     }
-    fn val(op: Operator, size: usize) -> BoxedStrategy<i32> {
+    fn val(op: Operator, size: usize, count: usize) -> BoxedStrategy<i32> {
         use Operator::*;
         match op {
-            Add | Mul => Strategy::boxed(1i32..500),
+            Add => Strategy::boxed(count as i32..(count * size) as i32),
+            Mul => Strategy::boxed(
+                vec(1..=size as i32, count).prop_map(|v| v.into_iter().product()),
+            ),
             Sub => Strategy::boxed(1..(size as i32 - 1)),
             Div => Strategy::boxed(2..size as i32),
         }
     }
-    prop_compose! {
-        fn test_case()(size in 4usize..9, op in any_op())
-            (count in count(op), op in Just(op), size in Just(size),val in val(op, size)) -> TestCase {
-            TestCase{size, count, constraint: Constraint{val, op}}
-        }
+
+    fn test_case() -> impl Strategy<Value = TestCase> {
+        (4usize..9, any_op()).prop_flat_map(|(size, op)| {
+            count(op).prop_flat_map(move |count| {
+                val(op, size, count).prop_map(move |val| TestCase {
+                    size,
+                    count,
+                    constraint: Constraint { val, op },
+                })
+            })
+        })
     }
 
     proptest! {
@@ -646,14 +819,90 @@ mod tests {
         fn test_constraint_satisfying_values(tc in test_case()) {
             let mut expected = constraint_satisfying_values_brute(tc.constraint, tc.count, tc.size);
             prop_assume!(!expected.is_empty());
+            // We can't disable conflict checking for count = 2, so filter by count here.
+            if tc.count == 2 {
+                expected.retain(|v| v[0] != v[1]);
+            }
             let arena = Bump::new();
-            // We don't want to test internal conflict checking, so we make cells that don't
-            // conflict.
+            // For count > 2, we don't want to test internal conflict checking, so we make cells
+            // that don't conflict.
             prop_assume!(tc.size >= tc.count);
             let cells : Vec<_> = (0..tc.count).map(|i| i * (tc.size + 1)).collect();
             let mut actual :Vec<_>= constraint_satisfying_values(&arena, tc.constraint, &cells, tc.size);
             expected.sort();
             actual.sort();
+            assert_eq!(expected, actual);
+        }
+    }
+    #[derive(Copy, Clone, Debug)]
+    enum Direction {
+        Up,
+        Down,
+        Left,
+        Right,
+    }
+    impl Direction {
+        fn any() -> impl Strategy<Value = Direction> {
+            prop_oneof![
+                Just(Direction::Up),
+                Just(Direction::Down),
+                Just(Direction::Left),
+                Just(Direction::Right),
+            ]
+        }
+    }
+    fn block_from_directions(directions: Vec<Direction>) -> (usize, Vec<usize>) {
+        let mut coords = vec![(0, 0)];
+        for d in directions {
+            let (x0, y0) = *coords.last().unwrap();
+            let new = match d {
+                Direction::Up => (x0, y0 - 1),
+                Direction::Down => (x0, y0 + 1),
+                Direction::Left => (x0 - 1, y0),
+                Direction::Right => (x0 + 1, y0),
+            };
+            coords.push(new);
+        }
+        let xmin = coords.iter().map(|(x, _)| *x).min().unwrap();
+        let xmax = coords.iter().map(|(x, _)| *x).max().unwrap();
+        let ymin = coords.iter().map(|(_, y)| *y).min().unwrap();
+        let ymax = coords.iter().map(|(_, y)| *y).max().unwrap();
+        let size = max(xmax - xmin, ymax - ymin) as usize + 1;
+        let mut ixs: Vec<_> = coords
+            .into_iter()
+            .map(|(x, y)| ((x - xmin) + size as i32 * (y - ymin)) as usize)
+            .collect();
+        ixs.sort_unstable();
+        ixs.dedup();
+        (size, ixs)
+    }
+    fn block_strategy() -> impl Strategy<Value = (usize, Vec<usize>, Vec<i8>)> {
+        vec(Direction::any(), 1..8).prop_flat_map(|directions| {
+            let (size, cells) = block_from_directions(directions);
+            vec(1..=size as i8, cells.len())
+                .prop_map(move |values| (size, cells.clone(), values))
+        })
+    }
+
+    fn no_conflict_simple(size: usize, cells: &[usize], elements: &[i8]) -> bool {
+        let mut rows = HashSet::new();
+        let mut cols = HashSet::new();
+        for (&i, &val) in zip(cells, elements) {
+            let x = i % size;
+            let y = i / size;
+            if !rows.insert((y, val)) || !cols.insert((x, val)) {
+                return false;
+            }
+        }
+        true
+    }
+
+    proptest! {
+        #[test]
+        fn test_cell_masks((size, cells, elements) in block_strategy()) {
+            let expected = no_conflict_simple(size, &cells, &elements);
+            let masks = CellMasks::new(size, &cells);
+            let actual = masks.no_conflict(&elements);
             assert_eq!(expected, actual);
         }
     }

@@ -1,5 +1,5 @@
 use std::simd::{
-    cmp::{SimdPartialEq, SimdPartialOrd},
+    cmp::SimdPartialEq,
     num::{SimdInt, SimdUint},
     LaneCount, Mask, Simd, SupportedLaneCount,
 };
@@ -20,9 +20,6 @@ impl BitMultiset {
         self.0 |= 1 << (x * MULTISET_WIDTH);
     }
     #[cfg(test)]
-    fn insert(&mut self, x: Bitmask) {
-        self.0 += 1 << (x * MULTISET_WIDTH);
-    }
     pub fn contains(&self, x: Bitmask) -> bool {
         let mask: u32 = MULTISET_MASK << (x * MULTISET_WIDTH);
         self.0 & mask > 0

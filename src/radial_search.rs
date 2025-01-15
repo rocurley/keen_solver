@@ -21,7 +21,7 @@ impl SearchBlock<'_, '_> {
         self.possibility_ix + 1 < self.block.possibilities.len()
     }
     fn current_possibility(&self) -> &[i8] {
-        &self.block.possibilities[self.possibility_ix]
+        self.block.possibilities[self.possibility_ix]
     }
 }
 
@@ -67,7 +67,7 @@ where
     }
 }
 
-impl<'arena> GameState<'arena> {
+impl GameState<'_> {
     pub fn radial_search(&mut self) -> bool {
         let mut made_progress = false;
         for block_id in 0..self.blocks.len() {
@@ -298,7 +298,7 @@ mod tests {
     }
 
     fn single_vectorization_test(path: &str) {
-        let save = std::fs::read(&path).unwrap();
+        let save = std::fs::read(path).unwrap();
         let arena = Bump::new();
         let mut expected = GameState::from_save(&arena, save.as_slice());
         let mut actual = expected.clone();
