@@ -8,6 +8,7 @@ use union_find::{QuickUnionUf, UnionByRank, UnionFind};
 use crate::{
     delete_from_vector,
     factorization::{self, factorize, Factorization},
+    permutation::{permute, visit_unique_permutations},
 };
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -245,7 +246,7 @@ impl PossibilityContext<'_> {
                 && (1..=self.size as i32).contains(&remainder)
         };
         if reset_range(0, &mut v) {
-            self.permutations(arena, &v, &mut out);
+            self.write_permutations(arena, &v, &mut out);
         }
         loop {
             debug_assert!(v[..self.count - 1]
@@ -270,50 +271,26 @@ impl PossibilityContext<'_> {
                 continue;
             }
             if reset_range(i + 1, &mut v) {
-                self.permutations(arena, &v, &mut out);
+                self.write_permutations(arena, &v, &mut out);
             }
         }
-        out.dedup();
         out
     }
 
-    fn permutations<'arena>(
+    fn write_permutations<'arena>(
         &self,
         arena: &'arena Bump,
         v: &[Foo],
         out: &mut Vec<&'arena [i8]>,
     ) {
-        let start = out.len();
-        let mut v: Vec<_> = v.iter().map(|x| x.val as i8).collect();
-        out.reserve((1..=v.len()).product());
-        self.permutations_inner(arena, &mut v, out, 0);
-        // Duplicates will be adjacent
-        let has_duplicates = v.windows(2).any(|window| window[0] == window[1]);
-        // Prepare for a dedup step at the end
-        if has_duplicates {
-            out[start..].sort_unstable()
-        }
-    }
-
-    fn permutations_inner<'arena>(
-        &self,
-        arena: &'arena Bump,
-        v: &mut [i8],
-        out: &mut Vec<&'arena [i8]>,
-        depth: usize,
-    ) {
-        if depth == v.len() {
-            if self.no_conflict(&*v) {
-                out.push(arena.alloc_slice_copy(&*v));
+        let v: Vec<i8> = v.iter().map(|x| x.val as i8).collect();
+        let visit = |perm: &[usize]| {
+            let permuted = permute(&v, perm);
+            if self.no_conflict(&permuted) {
+                out.push(&*arena.alloc_slice_copy(&permuted));
             }
-            return;
-        }
-        self.permutations_inner(arena, v, out, depth + 1);
-        for i in depth + 1..v.len() {
-            swap_slice(depth, i, v);
-            self.permutations_inner(arena, v, out, depth + 1);
-            swap_slice(depth, i, v);
-        }
+        };
+        visit_unique_permutations(&v, visit);
     }
 }
 

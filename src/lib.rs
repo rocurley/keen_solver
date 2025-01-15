@@ -7,6 +7,7 @@ mod factorization;
 pub mod game;
 mod must_be_in_block;
 mod only_in_block;
+mod permutation;
 mod radial_search;
 
 use std::{
