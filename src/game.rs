@@ -483,25 +483,6 @@ impl<'arena> GameState<'arena> {
         self.apply_block_possibilities_to_cells(block_id);
         true
     }
-    /*
-    No solver considers the entire board at once. They consider subsets of the board. For each
-    solver, for each iteration,  there's a subset of the board it takes as input, and a subset
-    of the board it writes to.
-        ExcludeNInN:
-            Depends on arbitrary subsets of a row or column, affects the compliment within that
-            row or column.
-        MustBeInBlock:
-            Depends on a block, affects the block's neighbors
-        CompatibilitySearch:
-            Depends on a neighborhood, affects the center of the neighborhood.
-        RadialSearch(Promising):
-            Depends on a neighborhood, affects the center of the neighborhood.
-    The basic theory, then, is that we should run a solver on a target when the target's
-    dependencies for that solver have changed since the last time that solver was run on that
-    target. Probably the easiest way to track this is to, for every solver, keep track of what
-    items are eligible for that solver. ExcludeNInN would be a problem if you got really fine
-    grained with it, but keeping it to the row and column level for now should be fine.
-     */
     fn apply_block_possibilities_to_cells(&mut self, block_id: usize) {
         let block = &mut self.blocks[block_id];
         // Filter block cell possibilities by new block possibilities
@@ -525,6 +506,25 @@ impl<'arena> GameState<'arena> {
         }
         self.mark_block_changed(block_id);
     }
+    /*
+    No solver considers the entire board at once. They consider subsets of the board. For each
+    solver, for each iteration,  there's a subset of the board it takes as input, and a subset
+    of the board it writes to.
+        ExcludeNInN:
+            Depends on arbitrary subsets of a row or column, affects the compliment within that
+            row or column.
+        MustBeInBlock:
+            Depends on a block, affects the block's neighbors
+        CompatibilitySearch:
+            Depends on a neighborhood, affects the center of the neighborhood.
+        RadialSearch(Promising):
+            Depends on a neighborhood, affects the center of the neighborhood.
+    The basic theory, then, is that we should run a solver on a target when the target's
+    dependencies for that solver have changed since the last time that solver was run on that
+    target. Probably the easiest way to track this is to, for every solver, keep track of what
+    items are eligible for that solver. ExcludeNInN would be a problem if you got really fine
+    grained with it, but keeping it to the row and column level for now should be fine.
+     */
     fn mark_block_changed(&mut self, block_id: usize) {
         let block = &mut self.blocks[block_id];
         block.must_be_in_block_eligible = true;
@@ -536,7 +536,9 @@ impl<'arena> GameState<'arena> {
             self.rows_only_in_block_eligible[y] = true;
             self.cols_only_in_block_eligible[x] = true;
         }
-        for neighbor_id in block.interacting_blocks.clone() {
+        // Use indices to avoid holding a mutable reference to self.blocks
+        for i in 0..block.interacting_blocks.len() {
+            let neighbor_id = self.blocks[block_id].interacting_blocks[i];
             let neighbor = &mut self.blocks[neighbor_id];
             neighbor.compatibility_search_eligible = true;
             neighbor.radial_search_eligible = true;
