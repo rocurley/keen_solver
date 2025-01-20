@@ -1,2 +1,4 @@
 [target.x86_64-unknown-linux-gnu]
 rustflags = ["-Ctarget-cpu=native"]
+# When trying to use callgrind, use:
+# rustflags = ["-Ctarget-cpu=native", "-Ctarget-feature=-fma,-gfni"]
