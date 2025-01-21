@@ -3,10 +3,7 @@ use std::{
     collections::HashMap,
     fmt::Debug,
     iter::zip,
-    simd::{
-        cmp::{SimdPartialEq, SimdPartialOrd},
-        LaneCount, Simd, SupportedLaneCount,
-    },
+    simd::{cmp::SimdPartialEq, num::SimdUint, LaneCount, Simd, SupportedLaneCount},
 };
 
 use bumpalo::Bump;
@@ -451,13 +448,16 @@ impl<'arena> GameState<'arena> {
             .possibilities
             .copy_from_slice(&new_board.as_array()[..self.size * self.size]);
         self.assert_board_vec_nonzero(new_board);
-        let mut changed_blocks = vec![usize::MAX; self.size * self.size];
-        let all_blocks = Simd::load_or_default(&self.cells.block_id);
-        all_blocks.store_select(&mut changed_blocks, unchanged.cast());
-        changed_blocks.sort_unstable();
-        changed_blocks.dedup();
-        changed_blocks.pop(); // Remove dummy usize::MAX value
-        for block_id in changed_blocks {
+        let all_blocks = Simd::load_or(&self.cells.block_id, Simd::splat(usize::MAX));
+        let block_masks = Simd::splat(1) << all_blocks;
+        let changed_blocks = unchanged
+            .cast()
+            .select(Simd::splat(0), block_masks)
+            .reduce_or();
+        for block_id in 0..self.blocks.len() {
+            if (1 << block_id) & changed_blocks == 0 {
+                continue;
+            }
             let block = &mut self.blocks[block_id];
             block.possibilities.retain(|&block_possibility| {
                 zip(block_possibility, &block.cells).all(|(&x, &cell_ix)| {

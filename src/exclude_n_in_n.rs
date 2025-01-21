@@ -1,7 +1,6 @@
 use crate::game::{Bitmask, GameState};
 use std::{
     cmp::Ordering,
-    ops::BitOr,
     simd::{
         cmp::SimdPartialEq,
         num::{SimdInt, SimdUint},
