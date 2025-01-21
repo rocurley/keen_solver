@@ -88,7 +88,7 @@ impl GameState<'_> {
     }
 
     pub fn assert_board_vec_nonzero(&self, board: Simd<u8, 64>) {
-        assert!(board.as_array()[..self.size * self.size]
+        debug_assert!(board.as_array()[..self.size * self.size]
             .iter()
             .all(|x| *x > 0))
     }
@@ -111,7 +111,11 @@ impl GameState<'_> {
                 let triggered_cells =
                     (triggered_rows.to_int().cast() & row_masks).reduce_or() & match_mask;
                 let triggered_cells_vec = Mask::<i8, 64>::from_bitmask(triggered_cells);
-                board = triggered_cells_vec.select(matches, board);
+                let new_board = triggered_cells_vec.select(matches, board);
+                // Make this conditional to remove the data dependency in the most likely case
+                if new_board != board {
+                    board = new_board;
+                }
                 self.assert_board_vec_nonzero(board);
             }
         }
