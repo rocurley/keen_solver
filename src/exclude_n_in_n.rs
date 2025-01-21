@@ -31,7 +31,7 @@ impl GameState<'_> {
     // But these might be the same. If there are n cells with n possibilities, then the (s-n) other
     // cells will be the only place where the (s-n) other values occur.
     pub fn exclude_n_in_n(&mut self) -> bool {
-        if self.size <= 8 {
+        if self.size <= 1 {
             self.exclude_n_in_n_whole_board()
         } else {
             self.exclude_n_in_n_by_rows()
@@ -91,6 +91,8 @@ impl GameState<'_> {
     pub fn exclude_n_in_n_whole_board(&mut self) -> bool {
         assert!(self.size <= 8);
         let mut board = self.board_as_vec();
+        dbg!(&self.cells.possibilities);
+        dbg!(&board.as_array()[..self.size * self.size]);
         let zero = Simd::splat(0);
         for transposed in [true, false] {
             let row_masks: Simd<u64, 8> = if transposed {
@@ -117,6 +119,7 @@ impl GameState<'_> {
                 board = triggered_cells_vec.select(matches, board);
             }
         }
+        dbg!(&board.as_array()[..self.size * self.size]);
         self.update_board(board)
     }
 }
@@ -129,4 +132,33 @@ where
         *x = x.count_ones() as u64;
     }
     xs
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        fs::File,
+        io::{BufRead, BufReader},
+    };
+
+    use bumpalo::Bump;
+
+    use crate::parse_game_id;
+
+    #[test]
+    fn test_exclude_n_in_n_whole_board() {
+        let n = 1;
+        let file = File::open("puzzles").unwrap();
+        let puzzles = BufReader::new(file).lines().take(n);
+        for game_seed in puzzles {
+            let game_seed = game_seed.unwrap();
+            let arena = Bump::new();
+            let game = parse_game_id(&arena, &game_seed);
+            let mut expected = game.clone();
+            expected.exclude_n_in_n_by_rows();
+            let mut actual = game;
+            actual.exclude_n_in_n_whole_board();
+            assert_eq!(expected, actual);
+        }
+    }
 }
