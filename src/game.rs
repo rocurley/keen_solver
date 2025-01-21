@@ -700,7 +700,7 @@ pub fn parse_game_id<'arena>(arena: &'arena Bump, raw: &'_ str) -> GameState<'ar
         .collect();
     let cells = CellInfo {
         block_id,
-        possibilities: vec![(2 << size) - 1; size * size],
+        possibilities: vec![0; size * size],
     };
     for (block_id, block) in blocks.iter_mut().enumerate() {
         let mut mask = 0;
