@@ -141,7 +141,6 @@ impl GameState<'_> {
             Solver::RadialSearchPromising => self.radial_search_promising(),
             Solver::RadialSearch => self.radial_search(),
         };
-        dbg!(solver, res);
         if let Some(ref mut stats) = stats {
             let entropy_removed = if res {
                 initial_entropy - self.entropy()

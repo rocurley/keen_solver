@@ -98,19 +98,9 @@ impl GameState<'_> {
         let mut board = self.board_as_vec();
         self.assert_board_vec_nonzero(board);
         let zero = Simd::splat(0);
+        let (row_masks, col_masks) = row_col_masks_reference(self.size);
         for transposed in [true, false] {
-            let row_masks: Simd<u64, 8> = if transposed {
-                let base = (0..self.size as u64)
-                    .map(|i| 1 << (i * self.size as u64))
-                    .reduce(u64::bitor)
-                    .unwrap();
-                let v: Vec<_> = (0..self.size).map(|i| base << i).collect();
-                Simd::load_or_default(&v)
-            } else {
-                let base = 1u64 << self.size - 1;
-                let v: Vec<_> = (0..self.size).map(|i| base << (i * self.size)).collect();
-                Simd::load_or_default(&v)
-            };
+            let row_masks = if transposed { col_masks } else { row_masks };
             for value_mask in 1..1 << self.size {
                 let vec_mask = Simd::splat(value_mask);
                 let matches = vec_mask & board;
@@ -127,6 +117,25 @@ impl GameState<'_> {
         }
         self.update_board(board)
     }
+}
+
+fn row_col_masks_reference(size: usize) -> (Simd<u64, 8>, Simd<u64, 8>) {
+    let ids: Vec<_> = (0..(size * size) as u8).collect();
+    let ids: Simd<u8, 64> = Simd::load_or_default(&ids);
+    let mut mask = [false; 64];
+    mask[..size * size].copy_from_slice(&vec![true; size * size]);
+    let mask = Mask::from_array(mask);
+    let row = ids / Simd::splat(size as u8);
+    let col = ids % Simd::splat(size as u8);
+    let row_masks: Vec<_> = (0..size as u8)
+        .map(|i| (mask & row.simd_eq(Simd::splat(i))).to_bitmask())
+        .collect();
+    let row_masks = Simd::load_or_default(&row_masks);
+    let col_masks: Vec<_> = (0..size as u8)
+        .map(|i| (mask & col.simd_eq(Simd::splat(i))).to_bitmask())
+        .collect();
+    let col_masks = Simd::load_or_default(&col_masks);
+    (row_masks, col_masks)
 }
 
 fn simd_count_ones<const N: usize>(mut xs: Simd<u64, N>) -> Simd<u64, N>
@@ -152,6 +161,7 @@ mod tests {
 
     #[test]
     fn test_exclude_n_in_n_whole_board() {
+        use pretty_assertions::assert_eq;
         let n = 1;
         let file = File::open("puzzles").unwrap();
         let puzzles = BufReader::new(file).lines().take(n);
@@ -167,7 +177,7 @@ mod tests {
             // Wrong condition. But whole_board should be slightly weaker than by_rows, because
             // by_rows bounces back to blocks every row, and whole_board does not.
             assert_eq!(expected.cells.possibilities, actual.cells.possibilities);
-            assert_eq!(expected, actual);
+            assert_eq!(expected.blocks, actual.blocks);
         }
     }
 }

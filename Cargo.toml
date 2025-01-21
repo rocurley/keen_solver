@@ -21,3 +21,4 @@ union-find = "0.4.1"
 
 [dev-dependencies]
 proptest = "1.0.0"
+pretty_assertions = "1.4.1"
