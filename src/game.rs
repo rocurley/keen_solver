@@ -434,6 +434,33 @@ impl<'arena> GameState<'arena> {
         self.apply_block_possibilities_to_cells(block_id);
         true
     }
+    pub fn board_as_vec(&self) -> Simd<u8, 64> {
+        assert!(self.size <= 8);
+        Simd::load_or_default(&self.cells.possibilities)
+    }
+    pub fn update_board(&mut self, new_board: Simd<u8, 64>) -> bool {
+        let old_board = self.board_as_vec();
+        let changed = old_board.simd_eq(new_board);
+        if !changed.any() {
+            return false;
+        }
+        let mut changed_blocks = vec![usize::MAX; self.size * self.size];
+        let all_blocks = Simd::load_or_default(&self.cells.block_id);
+        all_blocks.store_select(&mut changed_blocks, changed.cast());
+        changed_blocks.sort_unstable();
+        changed_blocks.dedup();
+        changed_blocks.pop(); // Remove dummy usize::MAX value
+        for block_id in changed_blocks {
+            let block = &mut self.blocks[block_id];
+            block.possibilities.retain(|&block_possibility| {
+                zip(block_possibility, &block.cells).all(|(&x, &cell_ix)| {
+                    (1 << (x - 1)) & self.cells.possibilities[cell_ix] > 0
+                })
+            });
+            self.apply_block_possibilities_to_cells(block_id);
+        }
+        true
+    }
     pub fn get_row(&self, y: usize, transposed: bool) -> RowCopy {
         let possibilities = if transposed {
             Simd::gather_or_default(&self.cells.possibilities[y..], self.col_idx)
