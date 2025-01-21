@@ -1,5 +1,6 @@
 use crate::game::{Bitmask, GameState};
 use std::{
+    array,
     cmp::Ordering,
     simd::{
         cmp::SimdPartialEq,
@@ -97,7 +98,7 @@ impl GameState<'_> {
         let mut board = self.board_as_vec();
         self.assert_board_vec_nonzero(board);
         let zero = Simd::splat(0);
-        let (row_masks, col_masks) = row_col_masks_reference(self.size);
+        let (row_masks, col_masks) = row_col_masks(self.size);
         for transposed in [true, false] {
             let row_masks = if transposed { col_masks } else { row_masks };
             for value_mask in 1..1 << self.size {
@@ -122,23 +123,21 @@ impl GameState<'_> {
     }
 }
 
-fn row_col_masks_reference(size: usize) -> (Simd<u64, 8>, Simd<u64, 8>) {
-    let ids: Vec<_> = (0..(size * size) as u8).collect();
-    let ids: Simd<u8, 64> = Simd::load_or_default(&ids);
-    let mut mask = [false; 64];
-    mask[..size * size].copy_from_slice(&vec![true; size * size]);
-    let mask = Mask::from_array(mask);
-    let row = ids / Simd::splat(size as u8);
-    let col = ids % Simd::splat(size as u8);
-    let row_masks: Vec<_> = (0..size as u8)
-        .map(|i| (mask & row.simd_eq(Simd::splat(i))).to_bitmask())
-        .collect();
-    let row_masks = Simd::load_or_default(&row_masks);
-    let col_masks: Vec<_> = (0..size as u8)
-        .map(|i| (mask & col.simd_eq(Simd::splat(i))).to_bitmask())
-        .collect();
-    let col_masks = Simd::load_or_default(&col_masks);
-    (row_masks, col_masks)
+fn set_n_least_significant(n: usize) -> u64 {
+    u64::MAX >> (64 - n)
+}
+
+fn row_col_masks(size: usize) -> (Simd<u64, 8>, Simd<u64, 8>) {
+    let row_base = u64::MAX >> (64 - size);
+    let i: [u64; 8] = array::from_fn(|i| i as u64);
+    let i = Simd::from_array(i);
+    let rows = Simd::splat(row_base) << (i * Simd::splat(size as u64));
+    // Sets every sizeth bit in the least significant size*size bits
+    let col_base = set_n_least_significant(size * size) / set_n_least_significant(size);
+    let cols = Simd::splat(col_base) << i;
+    let mask: Mask<i64, 8> = Mask::from_bitmask(set_n_least_significant(size));
+    let mask = mask.to_int().cast();
+    (rows & mask, cols & mask)
 }
 
 fn simd_count_ones<const N: usize>(mut xs: Simd<u64, N>) -> Simd<u64, N>
@@ -156,11 +155,31 @@ mod tests {
     use std::{
         fs::File,
         io::{BufRead, BufReader},
+        simd::{cmp::SimdPartialEq, num::SimdInt, Mask, Simd},
     };
 
     use bumpalo::Bump;
 
-    use crate::parse_game_id;
+    use crate::{exclude_n_in_n::row_col_masks, parse_game_id};
+
+    fn row_col_masks_reference(size: usize) -> (Simd<u64, 8>, Simd<u64, 8>) {
+        let ids: Vec<_> = (0..(size * size) as u8).collect();
+        let ids: Simd<u8, 64> = Simd::load_or_default(&ids);
+        let mut mask = [false; 64];
+        mask[..size * size].copy_from_slice(&vec![true; size * size]);
+        let mask = Mask::from_array(mask);
+        let row = ids / Simd::splat(size as u8);
+        let col = ids % Simd::splat(size as u8);
+        let row_masks: Vec<_> = (0..size as u8)
+            .map(|i| (mask & row.simd_eq(Simd::splat(i))).to_bitmask())
+            .collect();
+        let row_masks = Simd::load_or_default(&row_masks);
+        let col_masks: Vec<_> = (0..size as u8)
+            .map(|i| (mask & col.simd_eq(Simd::splat(i))).to_bitmask())
+            .collect();
+        let col_masks = Simd::load_or_default(&col_masks);
+        (row_masks, col_masks)
+    }
 
     #[test]
     fn test_exclude_n_in_n_whole_board() {
@@ -181,6 +200,14 @@ mod tests {
             // by_rows bounces back to blocks every row, and whole_board does not.
             assert_eq!(expected.cells.possibilities, actual.cells.possibilities);
             assert_eq!(expected.blocks, actual.blocks);
+        }
+    }
+    #[test]
+    fn test_row_col_masks() {
+        for size in 1..=8 {
+            let expected = row_col_masks_reference(size);
+            let actual = row_col_masks(size);
+            assert_eq!(expected, actual, "\n  size: {}", size);
         }
     }
 }
