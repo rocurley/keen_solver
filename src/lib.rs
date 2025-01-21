@@ -133,7 +133,6 @@ impl GameState<'_> {
     fn run_solver(&mut self, solver: Solver, stats: &mut Option<&mut SolversStats>) -> bool {
         let initial_entropy = self.entropy();
         let start = Instant::now();
-        //dbg!(solver);
         let res = match solver {
             Solver::ExcludeNInN => self.exclude_n_in_n(),
             Solver::MustBeInBlock => self.must_be_in_block(),
@@ -142,6 +141,7 @@ impl GameState<'_> {
             Solver::RadialSearchPromising => self.radial_search_promising(),
             Solver::RadialSearch => self.radial_search(),
         };
+        dbg!(solver, res);
         if let Some(ref mut stats) = stats {
             let entropy_removed = if res {
                 initial_entropy - self.entropy()

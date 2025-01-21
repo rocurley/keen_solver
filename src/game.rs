@@ -3,7 +3,10 @@ use std::{
     collections::HashMap,
     fmt::Debug,
     iter::zip,
-    simd::{cmp::SimdPartialEq, LaneCount, Simd, SupportedLaneCount},
+    simd::{
+        cmp::{SimdPartialEq, SimdPartialOrd},
+        LaneCount, Simd, SupportedLaneCount,
+    },
 };
 
 use bumpalo::Bump;
@@ -440,13 +443,17 @@ impl<'arena> GameState<'arena> {
     }
     pub fn update_board(&mut self, new_board: Simd<u8, 64>) -> bool {
         let old_board = self.board_as_vec();
-        let changed = old_board.simd_eq(new_board);
-        if !changed.any() {
+        let unchanged = old_board.simd_eq(new_board);
+        if unchanged.all() {
             return false;
         }
+        self.cells
+            .possibilities
+            .copy_from_slice(&new_board.as_array()[..self.size * self.size]);
+        self.assert_board_vec_nonzero(new_board);
         let mut changed_blocks = vec![usize::MAX; self.size * self.size];
         let all_blocks = Simd::load_or_default(&self.cells.block_id);
-        all_blocks.store_select(&mut changed_blocks, changed.cast());
+        all_blocks.store_select(&mut changed_blocks, unchanged.cast());
         changed_blocks.sort_unstable();
         changed_blocks.dedup();
         changed_blocks.pop(); // Remove dummy usize::MAX value
@@ -457,6 +464,7 @@ impl<'arena> GameState<'arena> {
                     (1 << (x - 1)) & self.cells.possibilities[cell_ix] > 0
                 })
             });
+            assert!(block.possibilities.len() > 0);
             self.apply_block_possibilities_to_cells(block_id);
         }
         true

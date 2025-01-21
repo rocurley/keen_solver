@@ -11,7 +11,6 @@ use std::{
 
 const LANES: usize = 8;
 const ZERO: Simd<Bitmask, { LANES }> = Simd::from_array([0; LANES]);
-const ONE: Simd<u8, { LANES }> = Simd::from_array([1; LANES]);
 
 impl GameState<'_> {
     fn exclude_n_in_n_eligible(&mut self, y: usize, transposed: bool) -> &mut bool {
@@ -31,7 +30,7 @@ impl GameState<'_> {
     // But these might be the same. If there are n cells with n possibilities, then the (s-n) other
     // cells will be the only place where the (s-n) other values occur.
     pub fn exclude_n_in_n(&mut self) -> bool {
-        if self.size <= 1 {
+        if self.size <= 8 {
             self.exclude_n_in_n_whole_board()
         } else {
             self.exclude_n_in_n_by_rows()
@@ -88,11 +87,16 @@ impl GameState<'_> {
         self.update_row(row)
     }
 
+    pub fn assert_board_vec_nonzero(&self, board: Simd<u8, 64>) {
+        assert!(board.as_array()[..self.size * self.size]
+            .iter()
+            .all(|x| *x > 0))
+    }
+
     pub fn exclude_n_in_n_whole_board(&mut self) -> bool {
         assert!(self.size <= 8);
         let mut board = self.board_as_vec();
-        dbg!(&self.cells.possibilities);
-        dbg!(&board.as_array()[..self.size * self.size]);
+        self.assert_board_vec_nonzero(board);
         let zero = Simd::splat(0);
         for transposed in [true, false] {
             let row_masks: Simd<u64, 8> = if transposed {
@@ -114,12 +118,13 @@ impl GameState<'_> {
                 let row_match_counts = simd_count_ones(Simd::splat(match_mask) & row_masks);
                 let triggered_rows =
                     row_match_counts.simd_eq(Simd::splat(value_mask.count_ones() as u64));
-                let triggered_cells = (triggered_rows.to_int().cast() & row_masks).reduce_or();
+                let triggered_cells =
+                    (triggered_rows.to_int().cast() & row_masks).reduce_or() & match_mask;
                 let triggered_cells_vec = Mask::<i8, 64>::from_bitmask(triggered_cells);
                 board = triggered_cells_vec.select(matches, board);
+                self.assert_board_vec_nonzero(board);
             }
         }
-        dbg!(&board.as_array()[..self.size * self.size]);
         self.update_board(board)
     }
 }
@@ -156,8 +161,12 @@ mod tests {
             let game = parse_game_id(&arena, &game_seed);
             let mut expected = game.clone();
             expected.exclude_n_in_n_by_rows();
-            let mut actual = game;
+            let mut actual = game.clone();
             actual.exclude_n_in_n_whole_board();
+            assert_ne!(game.cells.possibilities, actual.cells.possibilities);
+            // Wrong condition. But whole_board should be slightly weaker than by_rows, because
+            // by_rows bounces back to blocks every row, and whole_board does not.
+            assert_eq!(expected.cells.possibilities, actual.cells.possibilities);
             assert_eq!(expected, actual);
         }
     }
